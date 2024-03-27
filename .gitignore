@@ -1,0 +1,4 @@
+*.csv
+main.py
+/result/*
+/__pycache__/*
