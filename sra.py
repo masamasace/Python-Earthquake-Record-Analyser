@@ -21,15 +21,19 @@ def setup_figure(num_row=1, num_col=1, width=5, height=4, left=0.125, right=0.9,
     fig.subplots_adjust(left=left, right=right, hspace=hspace, wspace=wspace)
     return (fig, axes)
 
+def acc_to_vel(acc):
+    for i in range(1, len(acc)):
+        acc[i] += acc[i-1]
+
 
 class SeismicRecord:
-    def __init__(self, record_path, record_type="JMA", parzen_width=0, time_range=[0, 0]) -> None:
+    def __init__(self, record_path, record_type="JMA", parzen_width=0, record_interval = 0.01) -> None:
         
         self.record_type = record_type
         self.record_path = Path(record_path).resolve()
         self.parzen_width = parzen_width
         self.result_folder = self.record_path.parent / "result"
-        self.time_range = time_range
+        self.record_interval = record_interval
         
         self.result_folder.mkdir(exist_ok=True, parents=True)
         
@@ -44,7 +48,6 @@ class SeismicRecord:
             
             # Load header info
             initial_time_str = self.record_data.iloc[5, 0][14:]
-            self.record_interval = 0.01
             temp_initial_time_format = "%Y %m %d %H %M %S"
             self.initial_time = datetime.datetime.strptime(initial_time_str, temp_initial_time_format)
             
@@ -100,29 +103,48 @@ class SeismicRecord:
             self.col_names = ["Time", "NS", "EW", "UD"]
             self.record_data = pd.DataFrame(np.vstack([temp_record_time, temp_record_NS, temp_record_EW, temp_record_UD]).T, 
                                             columns=self.col_names)
-        
+            
+        elif self.record_type == "HG":
+            
+            # load acceleration record
+            encoding_chr = "shift-jis"
+            self.col_names = ["NS", "EW", "UD"]
+            self.record_data = pd.read_csv(self.record_path,
+                                           encoding=encoding_chr, 
+                                           names=self.col_names,
+                                           skiprows=37)
+            
+            # load start time
+            with open(self.record_path, "r", encoding=encoding_chr) as f:
+                for i, line in enumerate(f):
+                    if i == 5:
+                        initial_time_str = line.split(",")[1]
+                        temp_initial_time_format = "%Y/%m/%d %H:%M:%S"
+                        self.initial_time = datetime.datetime.strptime(initial_time_str, temp_initial_time_format)
+                        break        
+            
+            # Add time column
+            self.record_data["Time"] = [self.initial_time + datetime.timedelta(seconds=i * self.record_interval) for i in range(len(self.record_data))]
+
+            self.record_data[self.col_names] = self.record_data[self.col_names].astype(float)
+            self.record_data = self.record_data[["Time", "NS", "EW", "UD"]]            
+            
         else:
-            pass
+            raise ValueError("Invalid record type!")
         
         self._calcurate_additional_parameter(parzen_width)
 
     
     def _calcurate_additional_parameter(self, parzen_width=0):
         
-        temp_initial_time_format = "%Y/%m/%d %H:%M:%S"
-        if self.time_range[0] != 0:
-            temp_start_time = datetime.datetime.strptime(self.time_range[0], temp_initial_time_format)
-            self.record_data = self.record_data[self.record_data["Time"] >= temp_start_time]
-        
-        if self.time_range[1] != 0:
-            temp_end_time = datetime.datetime.strptime(self.time_range[1], temp_initial_time_format)
-            self.record_data = self.record_data[self.record_data["Time"] <= temp_end_time]         
-        
         self.parzen_width = parzen_width
         
         # calcurate holizontal component
         self.record_data["H"] = (self.record_data["NS"] ** 2 + self.record_data["EW"] ** 2) ** (1/2)
         self.col_names = self.record_data.columns
+        
+        # calcurate absolute maximum value with sign in each component
+        self.record_data_abs_max = self.record_data.loc[self.record_data[self.col_names[1:]].abs().idxmax()]
         
         # calcurate Fourier Spectrum
         freq = np.fft.fftfreq(len(self.record_data), d=self.record_interval)
@@ -163,16 +185,42 @@ class SeismicRecord:
 
         self.col_names_freq = self.norm_fft_record_data.columns.values
                 
-    def export_time_series_record(self, ylim=[-200, 200], second_locator=[0]) -> None:
+    def export_time_series_record(self, xlim=[], ylim=[], second_locator=[0]) -> None:
         
-        fig, axes = setup_figure(num_row=3, hspace=.125)
+        flag_set_xlim = False
         
+        # format xlim and ylim 
+        if type(xlim) == list:
+            if len(xlim) == 0:
+                flag_set_xlim = False
+            elif len(xlim) == 2:
+                try:
+                    xlim = [datetime.datetime.strptime(xlim[0], "%H:%M:%S"), datetime.datetime.strptime(xlim[1], "%H:%M:%S")]
+                    flag_set_xlim = True
+                except:
+                    raise ValueError("Invalid xlim!")
+        else: 
+            raise ValueError("Invalid xlim!")
+        
+        if len(ylim) == 0:
+            ylim = [min(self.record_data[self.col_names[1:]].min()), max(self.record_data[self.col_names[1:]].max())]
+        
+        
+        # setup figure
+        fig, axes = setup_figure(num_row=3, hspace=.125, width=8, height=4)
+        
+        # plot time-series record
         axes[0, 0].plot(self.record_data["Time"], self.record_data["NS"], "k", linewidth=0.5)
         axes[1, 0].plot(self.record_data["Time"], self.record_data["EW"], "k", linewidth=0.5)
         axes[2, 0].plot(self.record_data["Time"], self.record_data["UD"], "k", linewidth=0.5)
         
+        # change figure style
         for i in range(3):
+            if flag_set_xlim:
+                axes[i, 0].set_xlim(xlim)
+            
             axes[i, 0].set_ylim(ylim)
+            
             axes[i, 0].spines["top"].set_visible(False)
             axes[i, 0].spines["bottom"].set_linewidth(0.5)
             axes[i, 0].spines["right"].set_visible(False)
@@ -181,7 +229,8 @@ class SeismicRecord:
             axes[i, 0].yaxis.set_tick_params(width=0.5)
             axes[i, 0].set_ylabel(self.col_names[i + 1] + " Acc. (gal)")
             
-            max_value = max(abs(self.record_data[self.col_names[i + 1]]))
+            # annotate max value
+            max_value = self.record_data_abs_max.iloc[i, i + 1]
             axes[i, 0].text(0.95, 0.05, f"Max : {max_value:.1f} gal", transform=axes[i, 0].transAxes, 
                             verticalalignment="bottom", horizontalalignment="right", fontsize=8, color="k")
             
@@ -192,7 +241,7 @@ class SeismicRecord:
             else:
                 axes[i, 0].xaxis.set_ticklabels([])
                 
-        max_value_holizontal = max(abs(self.record_data["H"]))
+        max_value_holizontal = self.record_data_abs_max["H"].iloc[3]
         axes[0, 0].text(0.95, 0.95, f"Max of Hol. Comp.: {max_value_holizontal:.1f} gal", 
                         transform=axes[0, 0].transAxes, verticalalignment="top", 
                         horizontalalignment="right", fontsize=8, color="r")
