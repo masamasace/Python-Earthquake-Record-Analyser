@@ -2,7 +2,8 @@
 
 ## Description
 
-This repository contains the seismic record analyzer tool. It is designed to analyze seismic records and extract useful information.
+`sra`(Seismic Record Analyser)は、簡易的な地震記録解析ツールです。地震記録を解析し、有用な情報を抽出することを目的としています。
+`sra` is a simple seismic record analysis tool. It aims to analyze seismic records and extract useful information.
 
 ## Features
 

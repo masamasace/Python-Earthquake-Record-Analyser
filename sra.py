@@ -6,7 +6,6 @@ import numpy as np
 import gc
 import scipy.signal as ss
 import matplotlib.dates as mdates
-import os
 
 
 plt.rcParams["font.family"] = "Arial"
