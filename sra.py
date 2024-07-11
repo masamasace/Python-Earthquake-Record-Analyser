@@ -60,7 +60,8 @@ def acc2disp_jma(acc):
 # base class for seismic record
 class SeismicRecord:
     def __init__(self, record_path, record_type="JMA", parzen_width=0, record_interval=0.01, h=0.05, 
-                 integration_method="JMA", integration_fft_butterworth_cutoff=0.1, integration_fft_butterworth_order=4) -> None:
+                 integration_method="JMA", integration_fft_butterworth_cutoff=0.1, integration_fft_butterworth_order=4,
+                 flag_baseline_correction=True) -> None:
         
         self.record_type = record_type
         self.record_path = Path(record_path).resolve()
@@ -70,6 +71,7 @@ class SeismicRecord:
         self.integration_method = integration_method
         self.integration_fft_butterworth_cutoff = integration_fft_butterworth_cutoff
         self.integration_fft_butterworth_order = integration_fft_butterworth_order
+        self.flag_baseline_correction = flag_baseline_correction
         
         # check intergration method
         if self.integration_method != "JMA" and self.integration_method != "fft":
@@ -148,22 +150,32 @@ class SeismicRecord:
             
         elif self.record_type == "HG":
             
-            # load acceleration record
             encoding_chr = "shift-jis"
-            self.col_names = ["NS_acc", "EW_acc", "UD_acc"]
+            sensor_model = ""
+            
+            with open(self.record_path, "r", encoding=encoding_chr) as f:
+                for i, line in enumerate(f):
+                    if i == 0:
+                        line = line[:7]
+                        sensor_model = line
+                    elif sensor_model == "SLP-SE6" and i == 4:
+                        start_time_str = line.split(",")[1].replace(" ", "")
+                        temp_start_time_format = "%y/%m/%d%H:%M:%S"
+                        self.start_time = datetime.datetime.strptime(start_time_str, temp_start_time_format)
+                        break
+                    
+                    elif sensor_model == "SLP-SE7" and i == 5:
+                        start_time_str = line.split(",")[1]
+                        temp_start_time_format = "%Y/%m/%d %H:%M:%S"
+                        self.start_time = datetime.datetime.strptime(start_time_str, temp_start_time_format)
+                        break
+            
+            # load acceleration record
+            self.col_names = ["UD_acc", "EW_acc", "NS_acc"]
             self.record_data = pd.read_csv(self.record_path,
                                            encoding=encoding_chr, 
                                            names=self.col_names,
                                            skiprows=37)
-            
-            # load start time
-            with open(self.record_path, "r", encoding=encoding_chr) as f:
-                for i, line in enumerate(f):
-                    if i == 5:
-                        start_time_str = line.split(",")[1]
-                        temp_start_time_format = "%Y/%m/%d %H:%M:%S"
-                        self.start_time = datetime.datetime.strptime(start_time_str, temp_start_time_format)
-                        break        
             
             # Add time column
             self.record_data["Time"] = [self.start_time + datetime.timedelta(seconds=i * self.record_interval) for i in range(len(self.record_data))]
@@ -183,6 +195,12 @@ class SeismicRecord:
                 
         # calcurate basic parameter
         self.record_length = len(self.record_data)
+        
+        # baseline correction
+        if self.flag_baseline_correction:
+            self.record_data["NS_acc"] = self.record_data["NS_acc"] - np.mean(self.record_data["NS_acc"].iloc[:100])
+            self.record_data["EW_acc"] = self.record_data["EW_acc"] - np.mean(self.record_data["EW_acc"].iloc[:100])
+            self.record_data["UD_acc"] = self.record_data["UD_acc"] - np.mean(self.record_data["UD_acc"].iloc[:100])
         
         # calcurate holizontal component
         self.record_data["H_acc"] = (self.record_data["NS_acc"] ** 2 + self.record_data["EW_acc"] ** 2) ** (1/2)
@@ -352,12 +370,24 @@ class SeismicRecord:
         print("finish calcurate Velocity and Displacement!")
     
     # get record data
-    def get_max_value(self):
+    def get_feature_value(self):
 
-        return self.record_data_abs_max
+        return (self.col_names, self.record_data_abs_max)
+
+    # get start time
+    def get_start_time(self):
+        
+        return self.start_time
         
     # export time-series record     
-    def export_time_series_record(self, xlim=[], ylim=[], second_locator=[0]) -> None:
+    def export_time_series_record(self, xlim=[], ylim=[], second_locator=[0], force_update=False) -> None:
+        
+        fig_name = self.result_folder / (self.record_path.stem + "_timeseries.png")
+        
+        if not force_update:
+            # check if the file already exists
+            if fig_name.exists():
+                return
         
         flag_set_xlim = False
         
@@ -449,8 +479,6 @@ class SeismicRecord:
         # set title
         title_str = self.start_time.strftime("%Y/%m/%d %H:%M:%S")
         axes[0, 0].set_title(title_str, fontsize=10)
-
-        fig_name = self.result_folder / (self.record_path.stem + "_timeseries.png")
         
         fig.savefig(fig_name, format="png", dpi=600, pad_inches=0.05, bbox_inches="tight")
         print("Exported time-series record!")
@@ -461,7 +489,14 @@ class SeismicRecord:
         gc.collect()
     
     
-    def export_fourier_spectrum(self, xlim=[0.05, 20], ylim=[0.1, 1000]) -> None:
+    def export_fourier_spectrum(self, xlim=[0.05, 20], ylim=[0.1, 1000], force_update=False) -> None:
+        
+        fig_name =  self.result_folder / (self.record_path.stem + "_fourierspectrum.png")
+        
+        if not force_update:
+            # check if the file already exists
+            if fig_name.exists():
+                return
 
         # setup figure        
         fig, axes = setup_figure(height=3.5)
@@ -492,23 +527,29 @@ class SeismicRecord:
         title_str = self.start_time.strftime("%Y/%m/%d %H:%M:%S") + " (Parzen Width:" + str(self.parzen_width) + " Hz)"
         axes[0, 0].set_title(title_str, fontsize=10)
         
-        fig_name =  self.result_folder / (self.record_path.stem + "_fourierspectrum.png")
         fig.savefig(fig_name, format="png", dpi=600, pad_inches=0.05, bbox_inches="tight")
         print("Exported Fourier spectrum record!")
-        
         
         plt.clf()
         plt.close()
         gc.collect()
         
         
-    def export_response_spectrum(self, xlim=[0.05, 20], ylim=[2, 2000], export_type=["abs_acc", "rel_acc", "vel", "disp"]) -> None:
+    def export_response_spectrum(self, xlim=[0.05, 20], ylim=[2, 2000], export_type=["abs_acc", "rel_acc", "vel", "disp"], force_update=False) -> None:
         
         # check type
         if type(export_type) != list:
             raise ValueError("Invalid export_type! It should be list containing 'abs_acc', 'rel_acc', 'vel', 'disp'!")
         
         for temp_export_type in export_type:
+            
+            fig_name =  self.result_folder / (self.record_path.stem + "_" + temp_export_type + "_responsespectrum.png")
+            
+            if not force_update:
+                # check if the file already exists
+                if fig_name.exists():
+                    continue                
+                
             fig, axes = setup_figure()
             
             if temp_export_type == "abs_acc":
@@ -548,7 +589,6 @@ class SeismicRecord:
             title_str = self.start_time.strftime("%Y/%m/%d %H:%M:%S") + " (h=" + str(self.h) + ")"
             axes[0, 0].set_title(title_str, fontsize=10)
             
-            fig_name =  self.result_folder / (self.record_path.stem + "_" + temp_export_type + "_responsespectrum.png")
             fig.savefig(fig_name, format="png", dpi=600, pad_inches=0.05, bbox_inches="tight")
             print("Exported", temp_export_type, "response spectrum record!")
             
