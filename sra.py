@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import gc
 import scipy.signal as ss
+import scipy.integrate as si
 import matplotlib.dates as mdates
 
 
@@ -60,7 +61,7 @@ def acc2disp_jma(acc):
 # base class for seismic record
 class SeismicRecord:
     def __init__(self, record_path, record_type="JMA", parzen_width=0, record_interval=0.01, h=0.05, 
-                 integration_method="JMA", integration_fft_butterworth_cutoff=0.1, integration_fft_butterworth_order=4,
+                 integration_method="JMA", integration_butterworth_cutoff=0.1, integration_butterworth_order=4,
                  flag_baseline_correction=True) -> None:
         
         self.record_type = record_type
@@ -69,13 +70,9 @@ class SeismicRecord:
         self.record_interval = record_interval
         self.h = h
         self.integration_method = integration_method
-        self.integration_fft_butterworth_cutoff = integration_fft_butterworth_cutoff
-        self.integration_fft_butterworth_order = integration_fft_butterworth_order
+        self.integration_butterworth_cutoff = integration_butterworth_cutoff
+        self.integration_butterworth_order = integration_butterworth_order
         self.flag_baseline_correction = flag_baseline_correction
-        
-        # check intergration method
-        if self.integration_method != "JMA" and self.integration_method != "fft":
-            raise ValueError("Invalid integration method!")
         
         # create result folder
         self.result_folder = self.record_path.parent / "result"
@@ -171,7 +168,7 @@ class SeismicRecord:
                         break
             
             # load acceleration record
-            self.col_names = ["UD_acc", "EW_acc", "NS_acc"]
+            self.col_names = ["UD_acc", "NS_acc", "EW_acc"]
             self.record_data = pd.read_csv(self.record_path,
                                            encoding=encoding_chr, 
                                            names=self.col_names,
@@ -198,9 +195,14 @@ class SeismicRecord:
         
         # baseline correction
         if self.flag_baseline_correction:
-            self.record_data["NS_acc"] = self.record_data["NS_acc"] - np.mean(self.record_data["NS_acc"].iloc[:100])
-            self.record_data["EW_acc"] = self.record_data["EW_acc"] - np.mean(self.record_data["EW_acc"].iloc[:100])
-            self.record_data["UD_acc"] = self.record_data["UD_acc"] - np.mean(self.record_data["UD_acc"].iloc[:100])
+            
+            temp_NS, temp_EW, temp_UD = self._baseline_correction()
+            
+            self.record_data["NS_acc"] = temp_NS
+            self.record_data["EW_acc"] = temp_EW
+            self.record_data["UD_acc"] = temp_UD
+            
+            print("finish baseline correction!")
         
         # calcurate holizontal component
         self.record_data["H_acc"] = (self.record_data["NS_acc"] ** 2 + self.record_data["EW_acc"] ** 2) ** (1/2)
@@ -288,6 +290,21 @@ class SeismicRecord:
 
         self.fft_col_names = self.fft_record_data.columns.values
     
+    def _baseline_correction(self):
+        
+        # calcurate baseline
+        temp_baseline_NS = np.mean(self.record_data["NS_acc"].iloc[:100])
+        temp_baseline_EW = np.mean(self.record_data["EW_acc"].iloc[:100])
+        temp_baseline_UD = np.mean(self.record_data["UD_acc"].iloc[:100])
+        
+        # apply baseline correction
+        temp_NS = self.record_data["NS_acc"] - temp_baseline_NS
+        temp_EW = self.record_data["EW_acc"] - temp_baseline_EW
+        temp_UD = self.record_data["UD_acc"] - temp_baseline_UD
+        
+        return (temp_NS, temp_EW, temp_UD)
+        
+        
     def _calcurate_fft(self):
         
         # calcurate Fourier Spectrum
@@ -307,7 +324,7 @@ class SeismicRecord:
         self.fft_record_data = pd.DataFrame(temp_fft_record_data, columns=self.fft_col_names)
         
         # convert freq column to float
-        self.fft_record_data["Freq"] = self.fft_record_data["Freq"].abs()
+        self.fft_record_data["Freq"] = np.real(self.fft_record_data["Freq"])
         
         print("finish calcurate Fourier Spectrum!")
     
@@ -326,45 +343,36 @@ class SeismicRecord:
         # TODO: FFT integration method
         elif self.integration_method == "fft":
             
+            raise ValueError("Not implemented yet!")
+        
+        elif self.integration_method == "cumtrapz":
+        
             # apply highpass filter and calculate velocity and displacement
-            temp_b, temp_a = ss.butter(self.integration_fft_butterworth_order,
-                                        self.integration_fft_butterworth_cutoff,
-                                        btype="high", analog=False, output="ba", fs=1/self.record_interval)
+            sos = ss.butter(self.integration_butterworth_order,
+                            self.integration_butterworth_cutoff,
+                            btype="highpass", analog=False, output="sos", fs=1/self.record_interval)
             
-            _, temp_h = ss.freqz(temp_b, temp_a, worN=len(self.fft_record_data) // 2, fs=1/self.record_interval)
             
-            temp_h_extended = np.append(temp_h, temp_h[-1])
-            temp_h_extended = np.append(temp_h_extended, np.flip(temp_h)[:-1])
+            temp_NS, temp_EW, temp_UD = self._baseline_correction()
+            temp_acc = np.vstack([temp_NS, temp_EW, temp_UD]).T            
+            temp_acc_filtered = ss.sosfilt(sos, temp_acc, axis=0)
             
-            temp_h_extended[0] = 0
+            temp_vel = si.cumulative_trapezoid(temp_acc_filtered, dx=self.record_interval, axis=0, initial=0)
+            temp_vel_filtered = ss.sosfilt(sos, temp_vel, axis=0)
             
-            temp_vel_fft = self.fft_record_data.copy().values[:, 1:]
-            temp_disp_fft = self.fft_record_data.copy().values[:, 1:]
+            temp_disp = si.cumulative_trapezoid(temp_vel_filtered, dx=self.record_interval, axis=0, initial=0)
+            temp_disp_filtered = ss.sosfilt(sos, temp_disp, axis=0)
+           
+            self.record_data["NS_vel"] = temp_vel_filtered[:, 0]
+            self.record_data["EW_vel"] = temp_vel_filtered[:, 1]
+            self.record_data["UD_vel"] = temp_vel_filtered[:, 2]
             
-            temp_omega = 2 * np.pi * self.fft_record_data["Freq"].values[1:]
-            
-            temp_vel_fft[1:, 0] = temp_vel_fft[1:, 0] / (1j * temp_omega) * temp_h_extended[1:]
-            temp_vel_fft[1:, 1] = temp_vel_fft[1:, 1] / (1j * temp_omega) * temp_h_extended[1:]
-            temp_vel_fft[1:, 2] = temp_vel_fft[1:, 2] / (1j * temp_omega) * temp_h_extended[1:]
-            
-            temp_disp_fft[1:, 0] = temp_disp_fft[1:, 0] / (-temp_omega**2) * temp_h_extended[1:]
-            temp_disp_fft[1:, 1] = temp_disp_fft[1:, 1] / (-temp_omega**2) * temp_h_extended[1:]
-            temp_disp_fft[1:, 2] = temp_disp_fft[1:, 2] / (-temp_omega**2) * temp_h_extended[1:]
-            
-            temp_vel_ifft = np.fft.ifft(temp_vel_fft, axis=0, norm="backward").real
-            temp_disp_ifft = np.fft.ifft(temp_disp_fft, axis=0, norm="backward").real
-            
-            self.record_data["NS_vel"] = temp_vel_ifft[:, 0]
-            self.record_data["EW_vel"] = temp_vel_ifft[:, 1]
-            self.record_data["UD_vel"] = temp_vel_ifft[:, 2]
-            
-            self.record_data["NS_disp"] = temp_disp_ifft[:, 0]
-            self.record_data["EW_disp"] = temp_disp_ifft[:, 1]
-            self.record_data["UD_disp"] = temp_disp_ifft[:, 2]
+            self.record_data["NS_disp"] = temp_disp_filtered[:, 0]
+            self.record_data["EW_disp"] = temp_disp_filtered[:, 1]
+            self.record_data["UD_disp"] = temp_disp_filtered[:, 2]
             
         else:
             raise ValueError("Invalid integration method!")
-            
         
         self.col_names = self.record_data.columns.values
         print("finish calcurate Velocity and Displacement!")
