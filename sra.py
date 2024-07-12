@@ -78,22 +78,26 @@ class SeismicRecord:
         self.result_folder = self.record_path.parent / "result"
         self.result_folder.mkdir(exist_ok=True, parents=True)
         
-        print("File Path:", self.record_path)
+        print("File:", self.record_path.stem)
         
         if self.record_type == "JMA":
             encoding_chr = "shift-jis"
+            
+            # Load header info
+            with open(self.record_path, "r", encoding=encoding_chr) as f:
+                for i, line in enumerate(f):
+                    if i == 5:
+                        start_time_str = line.split("=")[1].replace(" ", "").replace("\n", "")
+                        temp_start_time_format = "%Y%m%d%H%M%S"
+                        self.start_time = datetime.datetime.strptime(start_time_str, temp_start_time_format)
+                        break
+            
+            # load acceleration record
             self.col_names = ["NS_acc", "EW_acc", "UD_acc"]
             self.record_data = pd.read_csv(self.record_path,
                                            encoding=encoding_chr, 
-                                           names=self.col_names)
-            
-            # Load header info
-            start_time_str = self.record_data.iloc[5, 0][14:]
-            temp_start_time_format = "%Y %m %d %H %M %S"
-            self.start_time = datetime.datetime.strptime(start_time_str, temp_start_time_format)
-            
-            # Delite header info
-            self.record_data.drop(range(7), inplace=True)
+                                           names=self.col_names,
+                                           skiprows=7)
             
             # Add time column
             self.record_data["Time"] = [self.start_time + datetime.timedelta(seconds=i * self.record_interval) for i in range(len(self.record_data))]
@@ -114,7 +118,9 @@ class SeismicRecord:
             temp_record = []
             
             for temp_each_record_path in temp_record_paths:
-                temp_each_record_header_data = pd.read_csv(temp_each_record_path, nrows=16, header=None)
+                temp_each_record_header_data = pd.read_csv(temp_each_record_path, 
+                                                           nrows=16, 
+                                                           header=None)
                 
                 temp_start_time_format = "%Y/%m/%d %H:%M:%S"
                 
@@ -308,7 +314,7 @@ class SeismicRecord:
     def _calcurate_fft(self):
         
         # calcurate Fourier Spectrum
-        temp_fft_col_names = self.col_names[1:4]
+        temp_fft_col_names = ["NS_acc", "EW_acc", "UD_acc"]
         temp_record_data = self.record_data[temp_fft_col_names]
         
         temp_freq = np.fft.fftfreq(len(temp_record_data), d=self.record_interval)
