@@ -62,7 +62,7 @@ def acc2disp_jma(acc):
 class SeismicRecord:
     def __init__(self, record_path, record_type="JMA", parzen_width=0, record_interval=0.01, h=0.05, 
                  integration_method="JMA", integration_butterworth_cutoff=0.1, integration_butterworth_order=4,
-                 flag_baseline_correction=True) -> None:
+                 flag_baseline_correction=True, flag_export_csv=True) -> None:
         
         self.record_type = record_type
         self.record_path = Path(record_path).resolve()
@@ -73,6 +73,7 @@ class SeismicRecord:
         self.integration_butterworth_cutoff = integration_butterworth_cutoff
         self.integration_butterworth_order = integration_butterworth_order
         self.flag_baseline_correction = flag_baseline_correction
+        self.flag_export_csv = flag_export_csv
         
         # create result folder
         self.result_folder = self.record_path.parent / "result"
@@ -186,12 +187,28 @@ class SeismicRecord:
             self.record_data[self.col_names] = self.record_data[self.col_names].astype(float)
             self.record_data = self.record_data[["Time", "NS_acc", "EW_acc", "UD_acc"]] 
             
-            self.col_names = self.record_data.columns.values           
+            self.col_names = self.record_data.columns.values
+            
+        elif self.record_type == "JR-Takatori":
+        
+            pass           
             
         else:
             raise ValueError("Invalid record type!")
         
         self._calcurate_additional_parameter()
+        
+        # export time series record.
+        if self.flag_export_csv:
+            
+            temp_time_series_csv_path = self.result_folder / (self.record_path.stem + "_timeseries.csv")
+            self.record_data.to_csv(temp_time_series_csv_path, index=False)
+            
+            temp_fft_csv_path = self.result_folder / (self.record_path.stem + "_fft.csv")
+            self.fft_record_data.to_csv(temp_fft_csv_path, index=False)
+            
+            temp_response_spectrum_csv_path = self.result_folder / (self.record_path.stem + "_response_spectrum.csv")
+            self.response_spectrum_data.to_csv(temp_response_spectrum_csv_path, index=False)
 
     
     def _calcurate_additional_parameter(self):
@@ -244,14 +261,14 @@ class SeismicRecord:
         print("finish apply Parzen window!")
         
         # compute response spectrum
-        self.response_spectrum = pd.DataFrame({"nFreq": [], "NS_acc_resp": [], "EW_acc_resp": [], "UD_acc_resp": [], 
+        self.response_spectrum_data = pd.DataFrame({"nFreq": [], "NS_acc_resp": [], "EW_acc_resp": [], "UD_acc_resp": [], 
                                               "NS_vel_resp": [], "EW_vel_resp": [], "UD_vel_resp": [],
                                               "NS_disp_resp": [], "EW_disp_resp": [], "UD_disp_resp": []})
                                                 
-        self.response_spectrum["nFreq"] = np.logspace(np.log10(0.05), np.log10(20), 200)
+        self.response_spectrum_data["nFreq"] = np.logspace(np.log10(0.05), np.log10(20), 200)
         temp_omega = 2 * np.pi * self.fft_record_data["Freq"]
         
-        for i, n_freq in enumerate(self.response_spectrum["nFreq"]):
+        for i, n_freq in enumerate(self.response_spectrum_data["nFreq"]):
             
             temp_n_omega = 2 * np.pi * n_freq
             
@@ -276,21 +293,21 @@ class SeismicRecord:
             temp_ifft_UD_acc_rel = temp_ifft_UD_acc_abs + self.record_data["UD_acc"]
             
             # calcurate absolute maximum value of each response component
-            self.response_spectrum.loc[i, "NS_acc_resp_abs"] = np.abs(temp_ifft_NS_acc_abs).max()
-            self.response_spectrum.loc[i, "EW_acc_resp_abs"] = np.abs(temp_ifft_EW_acc_abs).max()
-            self.response_spectrum.loc[i, "UD_acc_resp_abs"] = np.abs(temp_ifft_UD_acc_abs).max()
+            self.response_spectrum_data.loc[i, "NS_acc_resp_abs"] = np.abs(temp_ifft_NS_acc_abs).max()
+            self.response_spectrum_data.loc[i, "EW_acc_resp_abs"] = np.abs(temp_ifft_EW_acc_abs).max()
+            self.response_spectrum_data.loc[i, "UD_acc_resp_abs"] = np.abs(temp_ifft_UD_acc_abs).max()
             
-            self.response_spectrum.loc[i, "NS_acc_resp_rel"] = np.abs(temp_ifft_NS_acc_rel).max()
-            self.response_spectrum.loc[i, "EW_acc_resp_rel"] = np.abs(temp_ifft_EW_acc_rel).max()
-            self.response_spectrum.loc[i, "UD_acc_resp_rel"] = np.abs(temp_ifft_UD_acc_rel).max()
+            self.response_spectrum_data.loc[i, "NS_acc_resp_rel"] = np.abs(temp_ifft_NS_acc_rel).max()
+            self.response_spectrum_data.loc[i, "EW_acc_resp_rel"] = np.abs(temp_ifft_EW_acc_rel).max()
+            self.response_spectrum_data.loc[i, "UD_acc_resp_rel"] = np.abs(temp_ifft_UD_acc_rel).max()
             
-            self.response_spectrum.loc[i, "NS_vel_resp"] = np.abs(temp_ifft_NS_vel).max()
-            self.response_spectrum.loc[i, "EW_vel_resp"] = np.abs(temp_ifft_EW_vel).max()
-            self.response_spectrum.loc[i, "UD_vel_resp"] = np.abs(temp_ifft_UD_vel).max()
+            self.response_spectrum_data.loc[i, "NS_vel_resp"] = np.abs(temp_ifft_NS_vel).max()
+            self.response_spectrum_data.loc[i, "EW_vel_resp"] = np.abs(temp_ifft_EW_vel).max()
+            self.response_spectrum_data.loc[i, "UD_vel_resp"] = np.abs(temp_ifft_UD_vel).max()
             
-            self.response_spectrum.loc[i, "NS_disp_resp"] = np.abs(temp_ifft_NS_disp).max()
-            self.response_spectrum.loc[i, "EW_disp_resp"] = np.abs(temp_ifft_EW_disp).max()
-            self.response_spectrum.loc[i, "UD_disp_resp"] = np.abs(temp_ifft_UD_disp).max()
+            self.response_spectrum_data.loc[i, "NS_disp_resp"] = np.abs(temp_ifft_NS_disp).max()
+            self.response_spectrum_data.loc[i, "EW_disp_resp"] = np.abs(temp_ifft_EW_disp).max()
+            self.response_spectrum_data.loc[i, "UD_disp_resp"] = np.abs(temp_ifft_UD_disp).max()
             
         print("finish calcurate Response Spectrum!")
 
@@ -383,15 +400,36 @@ class SeismicRecord:
         self.col_names = self.record_data.columns.values
         print("finish calcurate Velocity and Displacement!")
     
+    
     # get record data
-    def get_feature_value(self):
+    def get_abs_max(self):
 
         return (self.col_names, self.record_data_abs_max)
+
 
     # get start time
     def get_start_time(self):
         
         return self.start_time
+    
+    
+    # get time-series data
+    def get_time_series_data(self):
+        
+        return self.record_data
+    
+    
+    # get fft data
+    def get_fft_data(self):
+        
+        return self.fft_record_data
+
+
+    # get response spectrum data
+    def get_response_spectrum_data(self):
+        
+        return self.response_spectrum_data
+    
         
     # export time-series record     
     def export_time_series_record(self, xlim=[], ylim=[], second_locator=[0], force_update=False) -> None:
@@ -580,9 +618,9 @@ class SeismicRecord:
                 temp_ylabel = "Disp. Res. Spectrum (cm)"
             
             
-            axes[0, 0].plot(self.response_spectrum["nFreq"], self.response_spectrum["NS_" + temp_base_col_name], "r", linewidth=0.5, label="NS")
-            axes[0, 0].plot(self.response_spectrum["nFreq"], self.response_spectrum["EW_" + temp_base_col_name], "g", linewidth=0.5, label="EW")
-            axes[0, 0].plot(self.response_spectrum["nFreq"], self.response_spectrum["UD_" + temp_base_col_name], "b", linewidth=0.5, label="UD")
+            axes[0, 0].plot(self.response_spectrum_data["nFreq"], self.response_spectrum_data["NS_" + temp_base_col_name], "r", linewidth=0.5, label="NS")
+            axes[0, 0].plot(self.response_spectrum_data["nFreq"], self.response_spectrum_data["EW_" + temp_base_col_name], "g", linewidth=0.5, label="EW")
+            axes[0, 0].plot(self.response_spectrum_data["nFreq"], self.response_spectrum_data["UD_" + temp_base_col_name], "b", linewidth=0.5, label="UD")
         
             axes[0, 0].set_xscale("log")
             axes[0, 0].set_yscale("log")
@@ -609,3 +647,24 @@ class SeismicRecord:
             plt.clf()
             plt.close()
             gc.collect()
+
+class DesignCodeSpectrum:
+    
+    def __init__(self, code_type="JRA", year="H29", xlabel="period", predefined_x=None, ):
+        
+        if predefined_x == None:
+            
+            predefined_x = np.logspace(-1, 1, 100)
+        
+        if xlabel == "period":
+            
+            freq = 1 / predefined_x
+        
+        if code_type == "JRA":
+            
+            if year == "H29":
+                
+                
+                
+                
+        
