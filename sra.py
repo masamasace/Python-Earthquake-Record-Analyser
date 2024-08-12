@@ -666,41 +666,72 @@ class DesignCodeSpectrum:
             self.freq = predefined_x
             self.period = 1 / predefined_x
                 
-    def JRA(self, year=2017, level=1, type=1, ground_type=1):
+    def JRA(self, year=2017, level=1, type=1, ground_type=1, c=1):
 
+        """
+        JRA Design Code Spectrum
+        
+        Parameters
+        ----------
+        year : int
+            Year of the JRA Design Code
+        level : int
+            Earthquake level (1 or 2)
+        type : int
+            Earthquake type (1 or 2)
+        ground_type : int
+            Ground type (1, 2 or 3)
+        c : float
+            Coefficient for Reginal Correction
+        
+        Returns
+        -------
+        Sa : array
+            Standard Acceleration Response Spectrum (m/s/s)
+
+        Notes
+        -----
+        - Standard Acceleration Response Spectrum (Sa) does not include the effect of seismic epicenter distribution and probability of exceedance.
+        - Guidelines for seismic performance verification of river structures is also based on the JRA Design Code.
+        - 標準加速度応答スペクトルは、地域別補正係数を考慮していません。
+        - 令和6年において河川構造物の耐震性能照査指針も道路橋司法書に準じています。       
+      
+        """
+        
         self.design_code = "JRA"
         self.year = year
         self.level = level
         self.type = type
         self.ground_type = ground_type
+        self.c = c
 
         if year == 2017:
             if level == 1:
                 if ground_type == 1:
-                    self.Sa = self._JRA_2017_1_1_1(self.period)
+                    self.Sa0 = self._JRA_2017_1_1_1(self.period)
                 elif ground_type == 2:
-                    self.Sa = self._JRA_2017_1_1_2(self.period)
+                    self.Sa0 = self._JRA_2017_1_1_2(self.period)
                 elif ground_type == 3:
-                    self.Sa = self._JRA_2017_1_1_3(self.period)
+                    self.Sa0 = self._JRA_2017_1_1_3(self.period)
                 else:
                     raise ValueError("Invalid ground type!")
             elif level == 2:
                 if type == 1:
                     if ground_type == 1:
-                        self.Sa = self._JRA_2017_2_1_1(self.period)
+                        self.Sa0 = self._JRA_2017_2_1_1(self.period)
                     elif ground_type == 2:
-                        self.Sa = self._JRA_2017_2_1_2(self.period)
+                        self.Sa0 = self._JRA_2017_2_1_2(self.period)
                     elif ground_type == 3:
-                        self.Sa = self._JRA_2017_2_1_3(self.period)
+                        self.Sa0 = self._JRA_2017_2_1_3(self.period)
                     else:
                         raise ValueError("Invalid ground type!")
                 elif type == 2:
                     if ground_type == 1:
-                        self.Sa = self._JRA_2017_2_2_1(self.period)
+                        self.Sa0 = self._JRA_2017_2_2_1(self.period)
                     elif ground_type == 2:
-                        self.Sa = self._JRA_2017_2_2_2(self.period)
+                        self.Sa0 = self._JRA_2017_2_2_2(self.period)
                     elif ground_type == 3:
-                        self.Sa = self._JRA_2017_2_2_3(self.period)
+                        self.Sa0 = self._JRA_2017_2_2_3(self.period)
                     else:
                         raise ValueError("Invalid ground type!")
                 else:
@@ -709,31 +740,33 @@ class DesignCodeSpectrum:
                 raise ValueError("Invalid earthquake level!")
         else:
             raise ValueError("Invalid JRA Design code year!")
-    
+        
+        self.Sa = self.Sa0 * self.c
+
         return self.Sa
     
     def _debug_plot(self, design_code = "JRA", level=1, type=1):
         
         fig, ax = setup_figure()
 
-        Sa = []
+        Sa0 = []
 
         if design_code == "JRA":
             if level == 1:
-                Sa.append(self._JRA_2017_1_1_1(self.period))
-                Sa.append(self._JRA_2017_1_1_2(self.period))
-                Sa.append(self._JRA_2017_1_1_3(self.period))
+                Sa0.append(self._JRA_2017_1_1_1(self.period))
+                Sa0.append(self._JRA_2017_1_1_2(self.period))
+                Sa0.append(self._JRA_2017_1_1_3(self.period))
 
             elif level == 2:
                 if type == 1:
-                    Sa.append(self._JRA_2017_2_1_1(self.period))
-                    Sa.append(self._JRA_2017_2_1_2(self.period))
-                    Sa.append(self._JRA_2017_2_1_3(self.period))
+                    Sa0.append(self._JRA_2017_2_1_1(self.period))
+                    Sa0.append(self._JRA_2017_2_1_2(self.period))
+                    Sa0.append(self._JRA_2017_2_1_3(self.period))
 
                 elif type == 2:
-                    Sa.append(self._JRA_2017_2_2_1(self.period))
-                    Sa.append(self._JRA_2017_2_2_2(self.period))
-                    Sa.append(self._JRA_2017_2_2_3(self.period))
+                    Sa0.append(self._JRA_2017_2_2_1(self.period))
+                    Sa0.append(self._JRA_2017_2_2_2(self.period))
+                    Sa0.append(self._JRA_2017_2_2_3(self.period))
                                                 
                 else:
                     raise ValueError("Invalid earthquake type!")
@@ -742,8 +775,8 @@ class DesignCodeSpectrum:
         else:
             raise ValueError("Invalid Design code!")
 
-        for i in range(len(Sa)):
-            ax[0, 0].plot(self.period, Sa[i], label=f"Ground Type {i+1}")
+        for i in range(len(Sa0)):
+            ax[0, 0].plot(self.period, Sa0[i], label=f"Ground Type {i+1}")
         
         ax[0, 0].legend()
         ax[0, 0].set_xscale("log")
@@ -754,7 +787,7 @@ class DesignCodeSpectrum:
         elif level == 2:
             ax[0, 0].set_ylim([0.3, 30])
         ax[0, 0].set_xlabel("Period (s)")
-        ax[0, 0].set_ylabel("Sa (m/s/s)")
+        ax[0, 0].set_ylabel("Sa0 (m/s/s)")
 
         ax[0, 0].xaxis.set_major_formatter(mticker.ScalarFormatter())
         ax[0, 0].yaxis.set_major_formatter(mticker.ScalarFormatter())
@@ -774,135 +807,133 @@ class DesignCodeSpectrum:
         ax[0, 0].xaxis.set_tick_params(width=0.5)
         ax[0, 0].yaxis.set_tick_params(width=0.5)
 
-
-
         plt.show()
 
     def _JRA_2017_1_1_1(self, T):
 
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.1)
         indices_2 = np.where((T >= 0.1) & (T <= 1.1))
         indices_3 = np.where(T > 1.1)
 
-        Sa[indices_1] = 4.31 * T[indices_1] ** (1/3)
-        Sa[indices_1 * (Sa[indices_1] < 1.6)] =  1.6
-        Sa[indices_2] = 2.0
-        Sa[indices_3] = 2.2 / T[indices_3]
+        Sa0[indices_1] = 4.31 * T[indices_1] ** (1/3)
+        Sa0[indices_1 * (Sa0[indices_1] < 1.6)] =  1.6
+        Sa0[indices_2] = 2.0
+        Sa0[indices_3] = 2.2 / T[indices_3]
 
-        return Sa
+        return Sa0
                 
     def _JRA_2017_1_1_2(self, T):
 
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.2)
         indices_2 = np.where((T >= 0.2) & (T <= 1.3))
         indices_3 = np.where(T > 1.3)
 
-        Sa[indices_1] = 4.27 * T[indices_1] ** (1/3)
-        Sa[indices_1 * (Sa[indices_1] < 2.0)] = 2.0
-        Sa[indices_2] = 2.5
-        Sa[indices_3] = 3.25 / T[indices_3]
+        Sa0[indices_1] = 4.27 * T[indices_1] ** (1/3)
+        Sa0[indices_1 * (Sa0[indices_1] < 2.0)] = 2.0
+        Sa0[indices_2] = 2.5
+        Sa0[indices_3] = 3.25 / T[indices_3]
 
-        return Sa
+        return Sa0
     
     def _JRA_2017_1_1_3(self, T):
 
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.34)
         indices_2 = np.where((T >= 0.34) & (T <= 1.5))
         indices_3 = np.where(T > 1.5)
 
-        Sa[indices_1] = 4.3 * T[indices_1] ** (1/3)
-        print(Sa[indices_1])
-        Sa[indices_1 * (Sa[indices_1] < 2.4)] = 2.4   
-        Sa[indices_2] = 3.0
-        Sa[indices_3] = 4.50 / T[indices_3]
+        Sa0[indices_1] = 4.3 * T[indices_1] ** (1/3)
+        print(Sa0[indices_1])
+        Sa0[indices_1 * (Sa0[indices_1] < 2.4)] = 2.4   
+        Sa0[indices_2] = 3.0
+        Sa0[indices_3] = 4.50 / T[indices_3]
 
-        return Sa
+        return Sa0
                 
     def _JRA_2017_2_1_1(self, T):
 
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.16)
         indices_2 = np.where((T >= 0.16) & (T <= 0.6))
         indices_3 = np.where(T > 0.6)
 
-        Sa[indices_1] = 25.79 * T[indices_1] ** (1/3)
-        Sa[indices_2] = 14.0
-        Sa[indices_3] = 8.4 / T[indices_3]
+        Sa0[indices_1] = 25.79 * T[indices_1] ** (1/3)
+        Sa0[indices_2] = 14.0
+        Sa0[indices_3] = 8.4 / T[indices_3]
 
-        return Sa
+        return Sa0
     
     def _JRA_2017_2_1_2(self, T):
 
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.22)
         indices_2 = np.where((T >= 0.22) & (T <= 0.9))
         indices_3 = np.where(T > 0.9)
 
-        Sa[indices_1] = 21.53 * T[indices_1] ** (1/3)
-        Sa[indices_2] = 13.0
-        Sa[indices_3] = 11.7 / T[indices_3]
+        Sa0[indices_1] = 21.53 * T[indices_1] ** (1/3)
+        Sa0[indices_2] = 13.0
+        Sa0[indices_3] = 11.7 / T[indices_3]
 
-        return Sa
+        return Sa0
     
     def _JRA_2017_2_1_3(self, T):
 
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.34)
         indices_2 = np.where((T >= 0.34) & (T <= 1.4))
         indices_3 = np.where(T > 1.4)
 
-        Sa[indices_1] = 17.19 * T[indices_1] ** (1/3)
-        Sa[indices_2] = 12.0
-        Sa[indices_3] = 16.8 / T[indices_3]
+        Sa0[indices_1] = 17.19 * T[indices_1] ** (1/3)
+        Sa0[indices_2] = 12.0
+        Sa0[indices_3] = 16.8 / T[indices_3]
 
-        return Sa
+        return Sa0
 
     def _JRA_2017_2_2_1(self, T):
 
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.3)
         indices_2 = np.where((T >= 0.3) & (T <= 0.7))
         indices_3 = np.where(T > 0.7)
 
-        Sa[indices_1] = 44.63 * T[indices_1] ** (2/3)
-        Sa[indices_2] = 20
-        Sa[indices_3] = 11.04 / T[indices_3] ** (5/3)
+        Sa0[indices_1] = 44.63 * T[indices_1] ** (2/3)
+        Sa0[indices_2] = 20
+        Sa0[indices_3] = 11.04 / T[indices_3] ** (5/3)
 
-        return Sa
+        return Sa0
 
     def _JRA_2017_2_2_2(self, T):
         
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.4)
         indices_2 = np.where((T >= 0.4) & (T <= 1.2))
         indices_3 = np.where(T > 1.2)
-        Sa[indices_1] = 32.24 * T[indices_1] ** (2/3)
-        Sa[indices_2] = 17.5
-        Sa[indices_3] = 23.71/ T[indices_3] ** (5/3)
+        Sa0[indices_1] = 32.24 * T[indices_1] ** (2/3)
+        Sa0[indices_2] = 17.5
+        Sa0[indices_3] = 23.71/ T[indices_3] ** (5/3)
 
-        return Sa
+        return Sa0
     
     def _JRA_2017_2_2_3(self, T):
 
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.5)
         indices_2 = np.where((T >= 0.5) & (T <= 1.5))
         indices_3 = np.where(T > 1.5)
 
-        Sa[indices_1] = 23.81 * T[indices_1] ** (2/3)
-        Sa[indices_2] = 15.0
-        Sa[indices_3] = 29.48 / T[indices_3] ** (5/3)
+        Sa0[indices_1] = 23.81 * T[indices_1] ** (2/3)
+        Sa0[indices_2] = 15.0
+        Sa0[indices_3] = 29.48 / T[indices_3] ** (5/3)
 
-        return Sa
+        return Sa0
