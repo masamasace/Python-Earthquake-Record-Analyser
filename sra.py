@@ -206,7 +206,7 @@ class SeismicRecord:
             self.record_data.to_csv(temp_time_series_csv_path, index=False)
             
             temp_fft_csv_path = self.result_folder / (self.record_path.stem + "_fft.csv")
-            self.fft_record_data.to_csv(temp_fft_csv_path, index=False)
+            self.fft_record_data.abs().to_csv(temp_fft_csv_path, index=False)
             
             temp_response_spectrum_csv_path = self.result_folder / (self.record_path.stem + "_response_spectrum.csv")
             self.response_spectrum_data.to_csv(temp_response_spectrum_csv_path, index=False)
@@ -262,11 +262,15 @@ class SeismicRecord:
         print("finish apply Parzen window!")
         
         # compute response spectrum
-        self.response_spectrum_data = pd.DataFrame({"nFreq": [], "NS_acc_resp": [], "EW_acc_resp": [], "UD_acc_resp": [], 
-                                              "NS_vel_resp": [], "EW_vel_resp": [], "UD_vel_resp": [],
-                                              "NS_disp_resp": [], "EW_disp_resp": [], "UD_disp_resp": []})
+        self.response_spectrum_data = pd.DataFrame({"nFreq": [], "nPeriod": [],
+                                                    "NS_acc_resp_abs": [], "EW_acc_resp_abs": [], "UD_acc_resp_abs": [],
+                                                    "NS_acc_resp_rel": [], "EW_acc_resp_rel": [], "UD_acc_resp_rel": [],
+                                                    "NS_vel_resp": [], "EW_vel_resp": [], "UD_vel_resp": [],
+                                                    "NS_disp_resp": [], "EW_disp_resp": [], "UD_disp_resp": []})
                                                 
         self.response_spectrum_data["nFreq"] = np.logspace(np.log10(0.05), np.log10(20), 200)
+        self.response_spectrum_data["nPeriod"] = 1 / self.response_spectrum_data["nFreq"]
+        
         temp_omega = 2 * np.pi * self.fft_record_data["Freq"]
         
         for i, n_freq in enumerate(self.response_spectrum_data["nFreq"]):
@@ -588,7 +592,11 @@ class SeismicRecord:
         gc.collect()
         
         
-    def export_response_spectrum(self, xlim=[0.05, 20], ylim=[2, 2000], export_type=["abs_acc", "rel_acc", "vel", "disp"], force_update=False) -> None:
+    def export_response_spectrum(self, xlim=[0.05, 20], ylim=[2, 2000], x_axis = "period",
+                                 export_type=["abs_acc", "rel_acc", "vel", "disp"], force_update=False) -> None:
+        # check x_axis
+        if x_axis not in ["period", "frequency", "p", "f"]:
+            raise ValueError("Invalid x_axis! It should be 'period' or 'frequency'!")
         
         # check type
         if type(export_type) != list:
@@ -618,16 +626,23 @@ class SeismicRecord:
                 temp_base_col_name = "disp_resp"
                 temp_ylabel = "Disp. Res. Spectrum (cm)"
             
+            if x_axis == "period" or x_axis == "p":
+                axes[0, 0].plot(self.response_spectrum_data["nPeriod"], self.response_spectrum_data["NS_" + temp_base_col_name], "r", linewidth=0.5, label="NS")
+                axes[0, 0].plot(self.response_spectrum_data["nPeriod"], self.response_spectrum_data["EW_" + temp_base_col_name], "g", linewidth=0.5, label="EW")
+                axes[0, 0].plot(self.response_spectrum_data["nPeriod"], self.response_spectrum_data["UD_" + temp_base_col_name], "b", linewidth=0.5, label="UD")
+                axes[0, 0].set_xlabel("Period (s)")
+                
+            elif x_axis == "frequency" or x_axis == "f":
+                
+                axes[0, 0].plot(self.response_spectrum_data["nFreq"], self.response_spectrum_data["NS_" + temp_base_col_name], "r", linewidth=0.5, label="NS")
+                axes[0, 0].plot(self.response_spectrum_data["nFreq"], self.response_spectrum_data["EW_" + temp_base_col_name], "g", linewidth=0.5, label="EW")
+                axes[0, 0].plot(self.response_spectrum_data["nFreq"], self.response_spectrum_data["UD_" + temp_base_col_name], "b", linewidth=0.5, label="UD")
+                axes[0, 0].set_xlabel("Frequency (Hz)")
             
-            axes[0, 0].plot(self.response_spectrum_data["nFreq"], self.response_spectrum_data["NS_" + temp_base_col_name], "r", linewidth=0.5, label="NS")
-            axes[0, 0].plot(self.response_spectrum_data["nFreq"], self.response_spectrum_data["EW_" + temp_base_col_name], "g", linewidth=0.5, label="EW")
-            axes[0, 0].plot(self.response_spectrum_data["nFreq"], self.response_spectrum_data["UD_" + temp_base_col_name], "b", linewidth=0.5, label="UD")
-        
             axes[0, 0].set_xscale("log")
             axes[0, 0].set_yscale("log")
             axes[0, 0].set_xlim(xlim)
             axes[0, 0].set_ylim(ylim)
-            axes[0, 0].set_xlabel("Frequency (Hz)")
             axes[0, 0].set_ylabel(temp_ylabel)
             axes[0, 0].spines["top"].set_linewidth(0.5)
             axes[0, 0].spines["bottom"].set_linewidth(0.5)
@@ -638,7 +653,7 @@ class SeismicRecord:
             leg = axes[0, 0].legend()
             leg.get_frame().set_linewidth(0.5)
             axes[0, 0].grid(visible=True, which="major", axis="both", color="k", linewidth=0.25, linestyle="--")
-            
+                
             title_str = self.start_time.strftime("%Y/%m/%d %H:%M:%S") + " (h=" + str(self.h) + ")"
             axes[0, 0].set_title(title_str, fontsize=10)
             
@@ -744,6 +759,12 @@ class DesignCodeSpectrum:
         self.Sa = self.Sa0 * self.c
 
         return self.Sa
+
+    def get_Sa(self):
+        
+        temp_df = pd.DataFrame({"Frequency": self.freq, "Period": self.period, "Sa": self.Sa})
+        
+        return temp_df
     
     def _debug_plot(self, design_code = "JRA", level=1, type=1):
         
@@ -937,3 +958,99 @@ class DesignCodeSpectrum:
         Sa0[indices_3] = 29.48 / T[indices_3] ** (5/3)
 
         return Sa0
+
+class GroundType:
+    def __init__(self, ground_model = None, physical_param = "vs"):
+        
+        """
+        Ground Type Evaluation
+        
+        Parameters
+        ----------
+        ground_model : array
+            Ground model data (N x 3)
+        physical_param : str
+            Physical parameter (vs or SPT-N)
+
+        Returns
+        -------
+        Tg : float
+            Dominant period of subsurface ground (s)
+        ground_type : int
+            Ground type (1, 2 or 3)
+        
+        Notes
+        -----
+        - Ground model should be N x 3 array.
+            - 1st column: Thickness of layer (m)
+            - 2nd column: Vs (m/s) or SPT-N
+            - 3rd column: Soil Type (S: Sandy Soil or C: Clayey Soil)
+        
+        """
+        self.physical_param = physical_param
+        
+        # check ground_model which should be N x 3 array
+        try:
+            temp_ground_model = pd.DataFrame(ground_model, columns=["Thickness", "Physical Parameter", "Soil Type"])
+        except:
+            raise ValueError("Invalid ground model!")
+        else:
+            # convert 0 and 1 column to float
+            temp_ground_model.iloc[:, :2] = temp_ground_model.iloc[:, :2].astype(float)
+            self.ground_model = temp_ground_model
+        
+        if not temp_ground_model.shape[1] == 3:
+            raise ValueError("Invalid ground model!")
+        
+        # check physical_param
+        if not physical_param in ["vs", "SPT-N"]:
+            raise ValueError("Invalid physical parameter!")
+        
+        elif physical_param == "SPT-N":
+            temp_vs = self._convert_N_to_vs(self.ground_model)
+            self.ground_model["Physical Parameter"] = temp_vs
+            
+        self._calc_soil_type()
+    
+    def get_ground_type(self):
+        
+        return (self.Tg, self.ground_type)
+    
+    def _convert_N_to_vs(self, ground_model):
+        
+        temp_vs = np.zeros(len(ground_model))
+        
+        for i in range(len(ground_model)):
+            temp_N = ground_model.loc[i, "Physical Parameter"]
+            temp_soil_type = ground_model.loc[i, "Soil Type"]
+            
+            if temp_soil_type == "S":
+                if temp_N <= 50:
+                    temp_vs[i] = 80 * temp_N ** (1/3)
+                else:
+                    temp_vs[i] = 80 * 50 ** (1/3)
+            elif temp_soil_type == "C":
+                if temp_N <= 25:
+                    temp_vs[i] = 100 * temp_N ** (1/3)
+                else:
+                    temp_vs[i] = 100 * 25 ** (1/3)
+            else:
+                raise ValueError("Invalid soil type found in ground model!")
+                    
+        return temp_vs
+
+    def _calc_soil_type(self):
+        
+        # calculate subsurface ground dominant period
+        self.Tg = 4 * (self.ground_model["Thickness"] / self.ground_model["Physical Parameter"]).sum()
+        
+        if self.Tg < 0.2:
+            self.ground_type = 1
+        
+        elif self.Tg < 0.6:
+            self.ground_type = 2
+        
+        else:
+            self.ground_type = 3
+        
+        
