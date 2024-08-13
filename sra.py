@@ -8,6 +8,7 @@ import scipy.signal as ss
 import scipy.integrate as si
 import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
+import re
 
 
 plt.rcParams["font.family"] = "Arial"
@@ -189,10 +190,69 @@ class SeismicRecord:
             self.record_data = self.record_data[["Time", "NS_acc", "EW_acc", "UD_acc"]] 
             
             self.col_names = self.record_data.columns.values
-            
-        elif self.record_type == "JR-Takatori":
         
-            pass           
+        # RTRI (Japan Railway Technical Research Institute) format for JR Takatori Record in 1995 Kobe EQ
+        # Reference: http://wiki.arch.ues.tmu.ac.jp/KyoshinTebiki/index.php?%C3%F8%CC%BE%A4%CA%B6%AF%BF%CC%B5%AD%CF%BF#v13066f8
+        
+        elif self.record_type == "JR":
+        
+            encoding_chr = "utf-8"
+            
+            temp_record_path_NS = self.record_path.parent / (self.record_path.stem + ".001")
+            temp_record_path_EW = self.record_path.parent / (self.record_path.stem + ".002")
+            temp_record_path_UD = self.record_path.parent / (self.record_path.stem + ".003")
+            
+            temp_record_paths = [temp_record_path_NS, temp_record_path_EW, temp_record_path_UD]
+            
+            temp_start_time_list =[]
+            temp_record = []
+            
+            for temp_each_record_path in temp_record_paths:
+                
+                with open(temp_each_record_path, "r", encoding=encoding_chr) as f:
+                    for i, line in enumerate(f):
+                        line = re.sub(r"\s+", " ", line)
+                        
+                        # Load start time info
+                        if i == 0:
+                            temp_start_date_str = line.split(" ")[0]
+                            temp_start_time_str = line.split(" ")[2]
+                            temp_start_date_time_str = temp_start_date_str + temp_start_time_str
+                            temp_start_date_time_format = "%y%m%d%H.%M"
+                            temp_start_time_list.append(datetime.datetime.strptime(temp_start_date_time_str, temp_start_date_time_format))
+                        # Load gain info
+                        elif i == 1:
+                            temp_max_value = float(line.split(" ")[3])
+                            break
+                    
+                # Load acceleration record
+                colspecs = [(10*i, 10*i+10) for i in range(8)]
+                temp_each_record_data = pd.read_fwf(temp_each_record_path, colspecs=colspecs, skiprows=2, header=None)
+                temp_each_record_data = temp_each_record_data.dropna(axis=0)
+                temp_each_record_data = temp_each_record_data.values.T.flatten("F")
+                temp_each_record_data = temp_each_record_data.astype(float)
+                temp_each_record_data_max = np.max(temp_each_record_data)
+                temp_gain = temp_max_value / temp_each_record_data_max
+                temp_each_record_data = temp_each_record_data * temp_gain
+                
+                temp_record.append(temp_each_record_data)
+                                        
+            # check if the start time is the same
+            if len(set(temp_start_time_list)) != 1:
+                raise Warning("Start time is not the same! Consider the start time of the first component.")
+            
+            self.start_time = temp_start_time_list[0]
+            
+            self.record_interval = 0.01
+            temp_record_time = np.array([self.start_time + datetime.timedelta(seconds=i * self.record_interval) for i in range(len(temp_record[0]))])
+            
+            temp_record_NS = temp_record[0]
+            temp_record_EW = temp_record[1]
+            temp_record_UD = temp_record[2]
+            
+            self.col_names = ["Time", "NS_acc", "EW_acc", "UD_acc"]
+            self.record_data = pd.DataFrame(np.vstack([temp_record_time, temp_record_NS, temp_record_EW, temp_record_UD]).T, 
+                                            columns=self.col_names)
             
         else:
             raise ValueError("Invalid record type!")
@@ -263,10 +323,10 @@ class SeismicRecord:
         
         # compute response spectrum
         self.response_spectrum_data = pd.DataFrame({"nFreq": [], "nPeriod": [],
-                                                    "NS_acc_resp_abs": [], "EW_acc_resp_abs": [], "UD_acc_resp_abs": [],
-                                                    "NS_acc_resp_rel": [], "EW_acc_resp_rel": [], "UD_acc_resp_rel": [],
-                                                    "NS_vel_resp": [], "EW_vel_resp": [], "UD_vel_resp": [],
-                                                    "NS_disp_resp": [], "EW_disp_resp": [], "UD_disp_resp": []})
+                                                    "NS_acc_resp_abs": [], "EW_acc_resp_abs": [], "UD_acc_resp_abs": [], "H_acc_resp_abs": [],
+                                                    "NS_acc_resp_rel": [], "EW_acc_resp_rel": [], "UD_acc_resp_rel": [], "H_acc_resp_rel": [],
+                                                    "NS_vel_resp": [], "EW_vel_resp": [], "UD_vel_resp": [], "H_vel_resp": [],
+                                                    "NS_disp_resp": [], "EW_disp_resp": [], "UD_disp_resp": [], "H_disp_resp": []})
                                                 
         self.response_spectrum_data["nFreq"] = np.logspace(np.log10(0.05), np.log10(20), 200)
         self.response_spectrum_data["nPeriod"] = 1 / self.response_spectrum_data["nFreq"]
@@ -284,35 +344,43 @@ class SeismicRecord:
             temp_ifft_NS_disp = np.fft.ifft(self.fft_record_data["NS_acc"] * temp_H, norm="backward")
             temp_ifft_EW_disp = np.fft.ifft(self.fft_record_data["EW_acc"] * temp_H, norm="backward")
             temp_ifft_UD_disp = np.fft.ifft(self.fft_record_data["UD_acc"] * temp_H, norm="backward")
+            temp_ifft_H_disp = (temp_ifft_NS_disp ** 2 + temp_ifft_EW_disp ** 2) ** (1/2)
             
             temp_ifft_NS_vel = np.fft.ifft(self.fft_record_data["NS_acc"] * temp_H * 1j * temp_omega, norm="backward")
             temp_ifft_EW_vel = np.fft.ifft(self.fft_record_data["EW_acc"] * temp_H * 1j * temp_omega, norm="backward")
             temp_ifft_UD_vel = np.fft.ifft(self.fft_record_data["UD_acc"] * temp_H * 1j * temp_omega, norm="backward")
+            temp_ifft_H_vel = (temp_ifft_NS_vel ** 2 + temp_ifft_EW_vel ** 2) ** (1/2)
             
             temp_ifft_NS_acc_abs = np.fft.ifft(self.fft_record_data["NS_acc"] * temp_H * -temp_omega**2, norm="backward")
             temp_ifft_EW_acc_abs = np.fft.ifft(self.fft_record_data["EW_acc"] * temp_H * -temp_omega**2, norm="backward")
             temp_ifft_UD_acc_abs = np.fft.ifft(self.fft_record_data["UD_acc"] * temp_H * -temp_omega**2, norm="backward")
+            temp_ifft_H_acc_abs = (temp_ifft_NS_acc_abs ** 2 + temp_ifft_EW_acc_abs ** 2) ** (1/2)
             
             temp_ifft_NS_acc_rel = temp_ifft_NS_acc_abs + self.record_data["NS_acc"]
             temp_ifft_EW_acc_rel = temp_ifft_EW_acc_abs + self.record_data["EW_acc"]
             temp_ifft_UD_acc_rel = temp_ifft_UD_acc_abs + self.record_data["UD_acc"]
+            temp_ifft_H_acc_rel = (temp_ifft_NS_acc_rel ** 2 + temp_ifft_EW_acc_rel ** 2) ** (1/2)
             
             # calcurate absolute maximum value of each response component
             self.response_spectrum_data.loc[i, "NS_acc_resp_abs"] = np.abs(temp_ifft_NS_acc_abs).max()
             self.response_spectrum_data.loc[i, "EW_acc_resp_abs"] = np.abs(temp_ifft_EW_acc_abs).max()
             self.response_spectrum_data.loc[i, "UD_acc_resp_abs"] = np.abs(temp_ifft_UD_acc_abs).max()
+            self.response_spectrum_data.loc[i, "H_acc_resp_abs"] = np.abs(temp_ifft_H_acc_abs).max()
             
             self.response_spectrum_data.loc[i, "NS_acc_resp_rel"] = np.abs(temp_ifft_NS_acc_rel).max()
             self.response_spectrum_data.loc[i, "EW_acc_resp_rel"] = np.abs(temp_ifft_EW_acc_rel).max()
             self.response_spectrum_data.loc[i, "UD_acc_resp_rel"] = np.abs(temp_ifft_UD_acc_rel).max()
+            self.response_spectrum_data.loc[i, "H_acc_resp_rel"] = np.abs(temp_ifft_H_acc_rel).max()
             
             self.response_spectrum_data.loc[i, "NS_vel_resp"] = np.abs(temp_ifft_NS_vel).max()
             self.response_spectrum_data.loc[i, "EW_vel_resp"] = np.abs(temp_ifft_EW_vel).max()
             self.response_spectrum_data.loc[i, "UD_vel_resp"] = np.abs(temp_ifft_UD_vel).max()
+            self.response_spectrum_data.loc[i, "H_vel_resp"] = np.abs(temp_ifft_H_vel).max()
             
             self.response_spectrum_data.loc[i, "NS_disp_resp"] = np.abs(temp_ifft_NS_disp).max()
             self.response_spectrum_data.loc[i, "EW_disp_resp"] = np.abs(temp_ifft_EW_disp).max()
             self.response_spectrum_data.loc[i, "UD_disp_resp"] = np.abs(temp_ifft_UD_disp).max()
+            self.response_spectrum_data.loc[i, "H_disp_resp"] = np.abs(temp_ifft_H_disp).max()
             
         print("finish calcurate Response Spectrum!")
 
