@@ -110,11 +110,24 @@ class SeismicRecord:
             
                     
         elif self.record_type == "NIED":
-            
-            # prepare file path for each component
-            temp_record_path_NS = self.record_path.parent / (self.record_path.stem + ".NS")
-            temp_record_path_EW = self.record_path.parent / (self.record_path.stem + ".EW")
-            temp_record_path_UD = self.record_path.parent / (self.record_path.stem + ".UD")
+
+            # file extension check and define file path for each component
+            if self.record_path.suffix in [".NS", ".EW", ".UD"]:
+                temp_record_path_NS = self.record_path.parent / (self.record_path.stem + ".NS")
+                temp_record_path_EW = self.record_path.parent / (self.record_path.stem + ".EW")
+                temp_record_path_UD = self.record_path.parent / (self.record_path.stem + ".UD")
+
+            elif self.record_path.suffix in [".NS1", ".EW1", ".UD1"]:
+                temp_record_path_NS = self.record_path.parent / (self.record_path.stem + ".NS1")
+                temp_record_path_EW = self.record_path.parent / (self.record_path.stem + ".EW1")
+                temp_record_path_UD = self.record_path.parent / (self.record_path.stem + ".UD1")
+                
+            elif self.record_path.suffix in [".NS2", ".EW2", ".UD2"]:
+                temp_record_path_NS = self.record_path.parent / (self.record_path.stem + ".NS2")
+                temp_record_path_EW = self.record_path.parent / (self.record_path.stem + ".EW2")
+                temp_record_path_UD = self.record_path.parent / (self.record_path.stem + ".UD2")
+            else:
+                raise ValueError("Invalid file extension!")
             
             temp_record_paths = [temp_record_path_NS, temp_record_path_EW, temp_record_path_UD]
             
