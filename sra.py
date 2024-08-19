@@ -78,7 +78,7 @@ class SeismicRecord:
         self.flag_export_csv = flag_export_csv
         
         # create result folder
-        self.result_folder = self.record_path.parent / "result"
+        self.result_folder = self.record_path.parent / "result" / self.record_path.name
         self.result_folder.mkdir(exist_ok=True, parents=True)
         
         print("File:", self.record_path.stem)
@@ -96,16 +96,16 @@ class SeismicRecord:
                         break
             
             # load acceleration record
-            self.col_names = ["NS_acc", "EW_acc", "UD_acc"]
+            temp_col_names = ["NS_acc", "EW_acc", "UD_acc"]
             self.record_data = pd.read_csv(self.record_path,
                                            encoding=encoding_chr, 
-                                           names=self.col_names,
+                                           names=temp_col_names,
                                            skiprows=7)
             
             # Add time column
             self.record_data["Time"] = [self.start_time + datetime.timedelta(seconds=i * self.record_interval) for i in range(len(self.record_data))]
 
-            self.record_data[self.col_names] = self.record_data[self.col_names].astype(float)
+            self.record_data[temp_col_names] = self.record_data[temp_col_names].astype(float)
             self.record_data = self.record_data[["Time", "NS_acc", "EW_acc", "UD_acc"]]
             
                     
@@ -117,11 +117,13 @@ class SeismicRecord:
                 temp_record_path_EW = self.record_path.parent / (self.record_path.stem + ".EW")
                 temp_record_path_UD = self.record_path.parent / (self.record_path.stem + ".UD")
 
+            # KiK-net format: suffix 1 means the sensor located in the ground
             elif self.record_path.suffix in [".NS1", ".EW1", ".UD1"]:
                 temp_record_path_NS = self.record_path.parent / (self.record_path.stem + ".NS1")
                 temp_record_path_EW = self.record_path.parent / (self.record_path.stem + ".EW1")
                 temp_record_path_UD = self.record_path.parent / (self.record_path.stem + ".UD1")
-                
+            
+            # KiK-net format: suffix 2 means the sensor located on the ground
             elif self.record_path.suffix in [".NS2", ".EW2", ".UD2"]:
                 temp_record_path_NS = self.record_path.parent / (self.record_path.stem + ".NS2")
                 temp_record_path_EW = self.record_path.parent / (self.record_path.stem + ".EW2")
@@ -163,10 +165,11 @@ class SeismicRecord:
             temp_record_EW = temp_record[1][1]
             temp_record_UD = temp_record[2][1]
             
-            self.col_names = ["Time", "NS_acc", "EW_acc", "UD_acc"]
+            temp_col_names = ["Time", "NS_acc", "EW_acc", "UD_acc"]
             self.record_data = pd.DataFrame(np.vstack([temp_record_time, temp_record_NS, temp_record_EW, temp_record_UD]).T, 
-                                            columns=self.col_names)
-            
+                                            columns=temp_col_names)
+            self.record_data[["NS_acc", "EW_acc", "UD_acc"]] = self.record_data[["NS_acc", "EW_acc", "UD_acc"]].astype(float)
+        
         elif self.record_type == "HG":
             
             encoding_chr = "shift-jis"
@@ -190,20 +193,18 @@ class SeismicRecord:
                         break
             
             # load acceleration record
-            self.col_names = ["UD_acc", "NS_acc", "EW_acc"]
+            temp_col_names = ["UD_acc", "NS_acc", "EW_acc"]
             self.record_data = pd.read_csv(self.record_path,
                                            encoding=encoding_chr, 
-                                           names=self.col_names,
+                                           names=temp_col_names,
                                            skiprows=37)
             
             # Add time column
             self.record_data["Time"] = [self.start_time + datetime.timedelta(seconds=i * self.record_interval) for i in range(len(self.record_data))]
 
-            self.record_data[self.col_names] = self.record_data[self.col_names].astype(float)
+            self.record_data[temp_col_names] = self.record_data[temp_col_names].astype(float)
             self.record_data = self.record_data[["Time", "NS_acc", "EW_acc", "UD_acc"]] 
             
-            self.col_names = self.record_data.columns.values
-        
         # RTRI (Japan Railway Technical Research Institute) format for JR Takatori Record in 1995 Kobe EQ
         # Reference: http://wiki.arch.ues.tmu.ac.jp/KyoshinTebiki/index.php?%C3%F8%CC%BE%A4%CA%B6%AF%BF%CC%B5%AD%CF%BF#v13066f8
         
@@ -266,10 +267,12 @@ class SeismicRecord:
             self.col_names = ["Time", "NS_acc", "EW_acc", "UD_acc"]
             self.record_data = pd.DataFrame(np.vstack([temp_record_time, temp_record_NS, temp_record_EW, temp_record_UD]).T, 
                                             columns=self.col_names)
+            self.record_data[["NS_acc", "EW_acc", "UD_acc"]] = self.record_data[["NS_acc", "EW_acc", "UD_acc"]].astype(float)
             
         else:
             raise ValueError("Invalid record type!")
         
+        self._validate_record_data()
         self._calcurate_additional_parameter()
         
         # export time series record.
@@ -284,6 +287,17 @@ class SeismicRecord:
             temp_response_spectrum_csv_path = self.result_folder / (self.record_path.stem + "_response_spectrum.csv")
             self.response_spectrum_data.to_csv(temp_response_spectrum_csv_path, index=False)
 
+    def _validate_record_data(self):
+
+        # check if the record data includes NaN
+        if self.record_data.isnull().values.any():
+            raise ValueError("Record data includes NaN!")
+        
+        # check if all the record is numeric
+        if not self.record_data.map(np.isreal).all().all():
+            raise ValueError("Record data includes non-numeric value!")
+        
+        print("finish validate record data!")
     
     def _calcurate_additional_parameter(self):
                 
@@ -294,12 +308,25 @@ class SeismicRecord:
         if self.flag_baseline_correction:
             
             temp_NS, temp_EW, temp_UD = self._baseline_correction()
+
+            self.record_data["NS_acc_raw"] = self.record_data["NS_acc"].copy()
+            self.record_data["EW_acc_raw"] = self.record_data["EW_acc"].copy()
+            self.record_data["UD_acc_raw"] = self.record_data["UD_acc"].copy()
             
             self.record_data["NS_acc"] = temp_NS
             self.record_data["EW_acc"] = temp_EW
             self.record_data["UD_acc"] = temp_UD
             
             print("finish baseline correction!")
+        
+        else:
+            self.record_data["NS_acc_raw"] = self.record_data["NS_acc"].copy()
+            self.record_data["EW_acc_raw"] = self.record_data["EW_acc"].copy()
+            self.record_data["UD_acc_raw"] = self.record_data["UD_acc"].copy()
+        
+        # reorganize column names
+        self.record_data = self.record_data[["Time", "NS_acc", "EW_acc", "UD_acc", "NS_acc_raw", "EW_acc_raw", "UD_acc_raw"]]
+        self.col_names_all = self.record_data.columns.values
         
         # calcurate holizontal component
         self.record_data["H_acc"] = (self.record_data["NS_acc"] ** 2 + self.record_data["EW_acc"] ** 2) ** (1/2)
@@ -311,14 +338,22 @@ class SeismicRecord:
         self._calcurate_velocity_displacement()
         
         # calcurate absolute maximum value with sign in each component
-        temp_record_data_abs_max = self.record_data.loc[self.record_data[self.col_names[1:]].abs().idxmax()]
-        
-        # create dictionary for each component
-        self.record_data_abs_max = np.array([temp_record_data_abs_max.iloc[i, i+1] for i in range(0, len(temp_record_data_abs_max))])
-        
+        # create col name list except time and _raw columns
+        temp_col_name = [col_name for col_name in self.record_data.columns.values if "_raw" not in col_name] 
+        temp_col_name = temp_col_name[1:]
+
+        temp_record_data_abs_max = self.record_data.loc[self.record_data[temp_col_name].abs().idxmax(), temp_col_name]
+        self.record_data_abs_max = temp_record_data_abs_max.copy()
+
+        # keep only 1st row and drop subsequent rows
+        self.record_data_abs_max = self.record_data_abs_max.iloc[0]
+
+        for i in range(len(temp_col_name)):
+            self.record_data_abs_max[temp_col_name[i]] = temp_record_data_abs_max.iloc[i, i]
+    
         for i in range(len(self.fft_col_names[1:])):
-                temp_col_name = self.fft_col_names[1 + i] + "_smoothed"       
-                self.fft_record_data[temp_col_name] = self.fft_record_data[self.fft_col_names[1 + i]]
+            temp_col_name = self.fft_col_names[1 + i] + "_smoothed"       
+            self.fft_record_data[temp_col_name] = self.fft_record_data[self.fft_col_names[1 + i]]
         
         # TODO:Viewwaveとの整合性が取れていない
         # apply parzen window
@@ -422,7 +457,7 @@ class SeismicRecord:
         
         temp_freq = np.fft.fftfreq(len(temp_record_data), d=self.record_interval)
         self.freq_interval = temp_freq[1] - temp_freq[0]
-        
+
         temp_fft_record_data = np.fft.fft(temp_record_data, norm="backward", axis=0)
         
         # stack temp_freq and temp_fft_record_data
@@ -483,14 +518,14 @@ class SeismicRecord:
         else:
             raise ValueError("Invalid integration method!")
         
-        self.col_names = self.record_data.columns.values
+        self.col_names_all = self.record_data.columns.values
         print("finish calcurate Velocity and Displacement!")
     
     
     # get record data
     def get_abs_max(self):
 
-        return (self.col_names, self.record_data_abs_max)
+        return (self.col_names_in_use, self.record_data_abs_max)
 
 
     # get start time
@@ -518,13 +553,57 @@ class SeismicRecord:
     
         
     # export time-series record     
-    def export_time_series_record(self, xlim=[], ylim=[], second_locator=[0], force_update=False) -> None:
+    def export_time_series_record(self, xlim=[], ylim=[], major_tick_location=[0], export_params = "all", 
+                                  minor_tick_location = [10, 20, 30, 40, 50], force_update=False) -> None:
+        """
+        Export time-series record as a figure.
         
-        fig_name = self.result_folder / (self.record_path.stem + "_timeseries.png")
+        Parameters
+        ----------
+        xlim : list, optional
+            The x-axis limits. The default is [].
+        ylim : list, optional
+            The y-axis limits. The default is [].
+        major_tick_location : list, optional
+            The major tick locations. The default is [0].
+        minor_tick_location : list, optional
+            The minor tick locations. The default is [10, 20, 30, 40, 50].
+        export_params : str or list, optional
+            The parameters to export. The default is "all".
+            available export_params: "all", "acc", "vel", "disp", list containing any combination of "acc", "vel", "disp"
+        force_update : bool, optional
+            Force update the figure. The default is False.
+
+        Returns
+        -------
+        None.
+        """
+
+        # check export_params
+        if type(export_params) == str:
+            if export_params == "all":
+                export_params = ["acc", "vel", "disp"]
+            elif export_params == "acc":
+                export_params = ["acc"]
+            elif export_params == "vel":
+                export_params = ["vel"]
+            elif export_params == "disp":
+                export_params = ["disp"]
+            else:
+                raise ValueError("Invalid export_params!")
+        elif type(export_params) == list:
+            for i in export_params:
+                if i not in ["acc", "vel", "disp"]:
+                    raise ValueError("Invalid export_params!")
         
+        # flatten export_params to string
+        fig_name_suffix = "-".join(export_params)
+        fig_name =  self.result_folder / (self.record_path.stem + "_timeseries_" + fig_name_suffix + ".png")
+
+        # check if the file already exists
         if not force_update:
-            # check if the file already exists
             if fig_name.exists():
+                print("The file already exists!")
                 return
         
         flag_set_xlim = False
@@ -535,62 +614,72 @@ class SeismicRecord:
                 flag_set_xlim = False
             elif len(xlim) == 2:
                 try:
-                    xlim = [datetime.datetime.strptime(xlim[0], "%H:%M:%S"), datetime.datetime.strptime(xlim[1], "%H:%M:%S")]
+                    xlim = [datetime.datetime.strptime(xlim[0], "%Y-%m-%d %H:%M:%S"), datetime.datetime.strptime(xlim[1], "%Y-%m-%d %H:%M:%S")]
                     flag_set_xlim = True
                 except:
                     raise ValueError("Invalid xlim!")
         else: 
             raise ValueError("Invalid xlim!")
         
-        if len(ylim) == 0:
-            ylim = [np.max(np.abs(self.record_data_abs_max[0:3])), np.max(np.abs(self.record_data_abs_max[4:7])), np.max(np.abs(self.record_data_abs_max[7:]))]
-        elif len(ylim) != 3:
-            raise ValueError("Invalid ylim!")
+        if type(ylim) == list:
+            if len(ylim) == 0:
+                temp_acc_max = self.record_data_abs_max[["NS_acc", "EW_acc", "UD_acc"]].abs().max()
+                temp_vel_max = self.record_data_abs_max[["NS_vel", "EW_vel", "UD_vel"]].abs().max()
+                temp_disp_max = self.record_data_abs_max[["NS_disp", "EW_disp", "UD_disp"]].abs().max()
+                temp_abs_max = self.record_data_abs_max.drop(["H_acc"])
+                ylim = [temp_acc_max, temp_vel_max, temp_disp_max]
+                ylim = [temp_max * 1.1 for temp_max in ylim]
+            elif len(ylim) == 3:
+                pass
+            else:
+                raise ValueError("Invalid ylim!")
         
         # setup figure
-        fig, axes = setup_figure(num_row=9, hspace=.125, width=8, height=12)
-        
-        # plot time-series record
-        axes[0, 0].plot(self.record_data["Time"], self.record_data["NS_acc"], "r", linewidth=0.5)
-        axes[1, 0].plot(self.record_data["Time"], self.record_data["EW_acc"], "g", linewidth=0.5)
-        axes[2, 0].plot(self.record_data["Time"], self.record_data["UD_acc"], "b", linewidth=0.5)
-        axes[3, 0].plot(self.record_data["Time"], self.record_data["NS_vel"], "r", linewidth=0.5)
-        axes[4, 0].plot(self.record_data["Time"], self.record_data["EW_vel"], "g", linewidth=0.5)
-        axes[5, 0].plot(self.record_data["Time"], self.record_data["UD_vel"], "b", linewidth=0.5)
-        axes[6, 0].plot(self.record_data["Time"], self.record_data["NS_disp"], "r", linewidth=0.5)
-        axes[7, 0].plot(self.record_data["Time"], self.record_data["EW_disp"], "g", linewidth=0.5)
-        axes[8, 0].plot(self.record_data["Time"], self.record_data["UD_disp"], "b", linewidth=0.5)
-        
-        y_label = [r"NS Acc. (cm/s$^2$)", r"EW Acc. (cm/s$^2$)", r"UD Acc. (cm/s$^2$)",
-                   r"NS Vel. (cm/s)", r"EW Vel. (cm/s)", r"UD Vel. (cm/s)",
-                   r"NS Disp. (cm)", r"EW Disp. (cm)", r"UD Disp. (cm)"]
-        
-        temp_max_values = np.append(self.record_data_abs_max[:3], self.record_data_abs_max[4:])
-        
-        # change figure style
-        for i in range(9):
+        fig, axes = setup_figure(num_row=len(export_params)*3, hspace=.125, width=8, height=len(export_params)*4)
+
+        color_list = ["r", "g", "b"]
+        temp_comp_name = ["NS", "EW", "UD"]
+
+        for i in range(len(export_params)*3):
+
+            temp_param_index = i // 3
+            temp_export_param= export_params[temp_param_index]
+            
+            temp_comp_index = i % 3
+            temp_color = color_list[temp_comp_index]
+
+            temp_col_name =  temp_comp_name[temp_comp_index] + "_"  + temp_export_param
+
+            # plot time-series record
+            axes[i, 0].plot(self.record_data["Time"], self.record_data[temp_col_name], color=temp_color, linewidth=0.5)
+
+            # set xlim and ylim
             if flag_set_xlim:
                 axes[i, 0].set_xlim(xlim)
             
-            if i < 3:
-                axes[i, 0].set_ylim(-ylim[0], ylim[0])
-                temp_max_value = temp_max_values[i]
-                axes[i, 0].text(0.95, 0.05, "Max: {:.1f}".format(temp_max_value) + " cm/s$^2$", 
-                                transform=axes[i, 0].transAxes, verticalalignment="bottom", 
-                                horizontalalignment="right", fontsize=8, color="k")
-            elif i < 6:
-                axes[i, 0].set_ylim(-ylim[1], ylim[1])
-                temp_max_value = temp_max_values[i]
-                axes[i, 0].text(0.95, 0.05, "Max: {:.2f}".format(temp_max_value) + " cm/s", 
-                                transform=axes[i, 0].transAxes, verticalalignment="bottom", 
-                                horizontalalignment="right", fontsize=8, color="k")
-            else:
-                axes[i, 0].set_ylim(-ylim[2], ylim[2])
-                temp_max_value = temp_max_values[i]
-                axes[i, 0].text(0.95, 0.05, "Max: {:.2f}".format(temp_max_value) + " cm", 
-                                transform=axes[i, 0].transAxes, verticalalignment="bottom", 
-                                horizontalalignment="right", fontsize=8, color="k")
-                
+            if temp_export_param == "acc":
+                temp_param_label_name = "Acc."
+                temp_param_unit = "cm/s$^2$"
+                temp_ylim_index = 0
+
+            elif temp_export_param == "vel":
+                temp_param_label_name = "Vel."
+                temp_param_unit = "cm/s"
+                temp_ylim_index = 1
+            
+            elif temp_export_param == "disp":
+                temp_param_label_name = "Disp."
+                temp_param_unit = "cm"
+                temp_ylim_index = 2
+            
+            axes[i, 0].set_ylim(-ylim[temp_ylim_index], ylim[temp_ylim_index])
+
+            # set y label and annotation
+            y_label = temp_comp_name[temp_comp_index] + " " + temp_param_label_name + " (" + temp_param_unit + ")"
+            ann_text = "Abs. Max: {:.2f}".format(self.record_data_abs_max[temp_col_name]) + " " + temp_param_unit    
+            axes[i, 0].set_ylabel(y_label, fontsize=8)    
+            axes[i, 0].text(0.95, 0.05, ann_text, transform=axes[i, 0].transAxes, verticalalignment="bottom",
+                            horizontalalignment="right", fontsize=8, color="k")    
             
             axes[i, 0].spines["top"].set_visible(False)
             axes[i, 0].spines["bottom"].set_linewidth(0.5)
@@ -598,26 +687,29 @@ class SeismicRecord:
             axes[i, 0].spines["left"].set_linewidth(0.5)
             axes[i, 0].xaxis.set_tick_params(width=0.5)
             axes[i, 0].yaxis.set_tick_params(width=0.5)
-            axes[i, 0].set_ylabel(y_label[i], fontsize=8)
-            
-            if i == 8:
-                axes[i, 0].xaxis.set_major_locator(mdates.SecondLocator(bysecond=second_locator))
+            axes[i, 0].xaxis.set_major_locator(mdates.SecondLocator(bysecond=major_tick_location))
+            axes[i, 0].xaxis.set_minor_locator(mdates.SecondLocator(bysecond=minor_tick_location))
+
+            if i == len(export_params)*3 - 1:
                 axes[i, 0].tick_params(axis="x", which="major", labelsize=8)
                 axes[i, 0].set_xlabel("Time")
-                
+            
             else:
                 axes[i, 0].xaxis.set_ticklabels([])
-        
-        # annotate max value of holizontal component
-        max_value_holizontal = self.record_data_abs_max[3]
-        axes[0, 0].text(0.95, 0.95, f"Max of Hol. Comp.: {max_value_holizontal:.1f} gal", 
-                        transform=axes[0, 0].transAxes, verticalalignment="top", 
-                        horizontalalignment="right", fontsize=8, color="k")
-        
-        # set title
-        title_str = self.start_time.strftime("%Y/%m/%d %H:%M:%S")
-        axes[0, 0].set_title(title_str, fontsize=10)
-        
+            
+            # annotate max value of holizontal component
+            if temp_comp_index == 0 and temp_export_param == "acc":
+
+                max_value_holizontal = self.record_data_abs_max["H_acc"]
+                axes[i, 0].text(0.95, 0.95, f"Abs. Max of Hol. Comp.: {max_value_holizontal:.2f} cm/s$^2$", 
+                                transform=axes[i, 0].transAxes, verticalalignment="top", 
+                                horizontalalignment="right", fontsize=8, color="k")
+            
+            # set title
+            title_str = self.start_time.strftime("%Y/%m/%d %H:%M:%S")
+            axes[0, 0].set_title(title_str, fontsize=10)
+
+        # export figure        
         fig.savefig(fig_name, format="png", dpi=600, pad_inches=0.05, bbox_inches="tight")
         print("Exported time-series record!")
         
@@ -625,8 +717,8 @@ class SeismicRecord:
         plt.clf()
         plt.close()
         gc.collect()
-    
-    
+
+
     def export_fourier_spectrum(self, xlim=[0.05, 20], ylim=[0.1, 1000], force_update=False) -> None:
         
         fig_name =  self.result_folder / (self.record_path.stem + "_fourierspectrum.png")
@@ -673,7 +765,7 @@ class SeismicRecord:
         gc.collect()
         
         
-    def export_response_spectrum(self, xlim=[0.05, 20], ylim=[2, 2000], x_axis = "period",
+    def export_response_spectrum(self, xlim=[0.1, 10], ylim=[2, 2000], x_axis = "period",
                                  export_type=["abs_acc", "rel_acc", "vel", "disp"], force_update=False) -> None:
         # check x_axis
         if x_axis not in ["period", "frequency", "p", "f"]:
@@ -1077,7 +1169,7 @@ class GroundType:
             raise ValueError("Invalid ground model!")
         else:
             # convert 0 and 1 column to float
-            temp_ground_model.iloc[:, :2] = temp_ground_model.iloc[:, :2].astype(float)
+            temp_ground_model[["Thickness", "Physical Parameter"]] = temp_ground_model[["Thickness", "Physical Parameter"]].astype(float)
             self.ground_model = temp_ground_model
         
         if not temp_ground_model.shape[1] == 3:
