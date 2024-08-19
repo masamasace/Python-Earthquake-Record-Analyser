@@ -9,6 +9,7 @@ import scipy.integrate as si
 import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
 import re
+import json
 
 
 plt.rcParams["font.family"] = "Arial"
@@ -64,7 +65,7 @@ def acc2disp_jma(acc):
 class SeismicRecord:
     def __init__(self, record_path, record_type="JMA", parzen_width=0, record_interval=0.01, h=0.05, 
                  integration_method="JMA", integration_butterworth_cutoff=0.1, integration_butterworth_order=4,
-                 flag_baseline_correction=True, flag_export_csv=True) -> None:
+                 flag_baseline_correction=True, baseline_count_indices= 100, flag_export_csv=True) -> None:
         
         self.record_type = record_type
         self.record_path = Path(record_path).resolve()
@@ -75,6 +76,8 @@ class SeismicRecord:
         self.integration_butterworth_cutoff = integration_butterworth_cutoff
         self.integration_butterworth_order = integration_butterworth_order
         self.flag_baseline_correction = flag_baseline_correction
+        self.baseline_count_indices = baseline_count_indices
+        self.baseline_offset_values = pd.DataFrame()
         self.flag_export_csv = flag_export_csv
         
         # create result folder
@@ -277,6 +280,26 @@ class SeismicRecord:
         
         # export time series record.
         if self.flag_export_csv:
+
+            temp_json_path = self.result_folder / (self.record_path.stem + "_params.json")
+            temp_json = {"record_type": self.record_type,
+                        "record_path": str(self.record_path),
+                        "start_time": self.start_time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "record_data_abs_max" : self.record_data_abs_max.to_dict(),
+                        "parzen_width": self.parzen_width,
+                        "record_interval": self.record_interval,
+                        "h": self.h,
+                        "integration_method": self.integration_method,
+                        "integration_butterworth_cutoff": self.integration_butterworth_cutoff,
+                        "integration_butterworth_order": self.integration_butterworth_order,
+                        "flag_baseline_correction": self.flag_baseline_correction,
+                        "baseline_count_indices": self.baseline_count_indices,
+                        "baseline_offset_values": self.baseline_offset_values.to_dict(),
+                        "flag_export_csv": self.flag_export_csv}
+            
+            with open(temp_json_path, "w") as f:
+                json.dump(temp_json, f, indent=4)
+
             
             temp_time_series_csv_path = self.result_folder / (self.record_path.stem + "_timeseries.csv")
             self.record_data.to_csv(temp_time_series_csv_path, index=False)
@@ -307,7 +330,7 @@ class SeismicRecord:
         # baseline correction
         if self.flag_baseline_correction:
             
-            temp_NS, temp_EW, temp_UD = self._baseline_correction()
+            self.baseline_offset_values, (temp_NS, temp_EW, temp_UD) = self._baseline_correction()
 
             self.record_data["NS_acc_raw"] = self.record_data["NS_acc"].copy()
             self.record_data["EW_acc_raw"] = self.record_data["EW_acc"].copy()
@@ -328,14 +351,19 @@ class SeismicRecord:
         self.record_data = self.record_data[["Time", "NS_acc", "EW_acc", "UD_acc", "NS_acc_raw", "EW_acc_raw", "UD_acc_raw"]]
         self.col_names_all = self.record_data.columns.values
         
-        # calcurate holizontal component
-        self.record_data["H_acc"] = (self.record_data["NS_acc"] ** 2 + self.record_data["EW_acc"] ** 2) ** (1/2)
-        
         # calcurate FFT
         self._calcurate_fft()
         
         # compute velocity and displacement
         self._calcurate_velocity_displacement()
+
+        # calcurate holizontal component
+        self.record_data["H_acc"] = (self.record_data["NS_acc"] ** 2 + self.record_data["EW_acc"] ** 2) ** (1/2)
+        self.record_data["3D_acc"] = (self.record_data["NS_acc"] ** 2 + self.record_data["EW_acc"] ** 2 + self.record_data["UD_acc"] ** 2) ** (1/2)
+        self.record_data["H_vel"] = (self.record_data["NS_vel"] ** 2 + self.record_data["EW_vel"] ** 2) ** (1/2)
+        self.record_data["3D_vel"] = (self.record_data["NS_vel"] ** 2 + self.record_data["EW_vel"] ** 2 + self.record_data["UD_vel"] ** 2) ** (1/2)
+        self.record_data["H_disp"] = (self.record_data["NS_disp"] ** 2 + self.record_data["EW_disp"] ** 2) ** (1/2)
+        self.record_data["3D_disp"] = (self.record_data["NS_disp"] ** 2 + self.record_data["EW_disp"] ** 2 + self.record_data["UD_disp"] ** 2) ** (1/2)
         
         # calcurate absolute maximum value with sign in each component
         # create col name list except time and _raw columns
@@ -437,16 +465,15 @@ class SeismicRecord:
     def _baseline_correction(self):
         
         # calcurate baseline
-        temp_baseline_NS = np.mean(self.record_data["NS_acc"].iloc[:100])
-        temp_baseline_EW = np.mean(self.record_data["EW_acc"].iloc[:100])
-        temp_baseline_UD = np.mean(self.record_data["UD_acc"].iloc[:100])
-        
+        temp_record_data = self.record_data[["NS_acc", "EW_acc", "UD_acc"]]
+        temp_baseline_offset_values = temp_record_data.iloc[:self.baseline_count_indices].mean()
+
         # apply baseline correction
-        temp_NS = self.record_data["NS_acc"] - temp_baseline_NS
-        temp_EW = self.record_data["EW_acc"] - temp_baseline_EW
-        temp_UD = self.record_data["UD_acc"] - temp_baseline_UD
-        
-        return (temp_NS, temp_EW, temp_UD)
+        temp_NS = self.record_data["NS_acc"] - temp_baseline_offset_values["NS_acc"]
+        temp_EW = self.record_data["EW_acc"] - temp_baseline_offset_values["EW_acc"]
+        temp_UD = self.record_data["UD_acc"] - temp_baseline_offset_values["UD_acc"]
+
+        return (temp_baseline_offset_values, (temp_NS, temp_EW, temp_UD))
         
         
     def _calcurate_fft(self):
@@ -698,10 +725,24 @@ class SeismicRecord:
                 axes[i, 0].xaxis.set_ticklabels([])
             
             # annotate max value of holizontal component
-            if temp_comp_index == 0 and temp_export_param == "acc":
+            if temp_export_param == "acc":
 
                 max_value_holizontal = self.record_data_abs_max["H_acc"]
-                axes[i, 0].text(0.95, 0.95, f"Abs. Max of Hol. Comp.: {max_value_holizontal:.2f} cm/s$^2$", 
+                axes[0, 0].text(0.95, 0.95, f"Abs. Max of Hol. Comp.: {max_value_holizontal:.2f} cm/s$^2$", 
+                                transform=axes[i, 0].transAxes, verticalalignment="top", 
+                                horizontalalignment="right", fontsize=8, color="k")
+            
+            elif temp_export_param == "vel":
+                
+                max_value_holizontal = self.record_data_abs_max["H_vel"]
+                axes[0, 0].text(0.95, 0.95, f"Abs. Max of Hol. Comp.: {max_value_holizontal:.2f} cm/s", 
+                                transform=axes[i, 0].transAxes, verticalalignment="top", 
+                                horizontalalignment="right", fontsize=8, color="k")
+                
+            elif temp_export_param == "disp":
+
+                max_value_holizontal = self.record_data_abs_max["H_disp"]
+                axes[0, 0].text(0.95, 0.95, f"Abs. Max of Hol. Comp.: {max_value_holizontal:.2f} cm", 
                                 transform=axes[i, 0].transAxes, verticalalignment="top", 
                                 horizontalalignment="right", fontsize=8, color="k")
             
@@ -777,7 +818,7 @@ class SeismicRecord:
         
         for temp_export_type in export_type:
             
-            fig_name =  self.result_folder / (self.record_path.stem + "_" + temp_export_type + "_responsespectrum.png")
+            fig_name =  self.result_folder / (self.record_path.stem + "_" + temp_export_type + "_response-spectrum.png")
             
             if not force_update:
                 # check if the file already exists
