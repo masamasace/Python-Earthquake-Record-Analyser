@@ -884,7 +884,7 @@ class DesignCodeSpectrum:
     
     def __init__(self, xlabel="period", predefined_x=None):
         
-        if predefined_x == None:
+        if predefined_x is None:
             
             predefined_x = np.logspace(-1, 1, 100)
         
