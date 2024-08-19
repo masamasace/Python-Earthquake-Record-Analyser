@@ -81,7 +81,7 @@ class SeismicRecord:
         self.flag_export_csv = flag_export_csv
         
         # create result folder
-        self.result_folder = self.record_path.parent / "result" / self.record_path.name
+        self.result_folder = self.record_path.parents[1] / "res" / self.record_path.name
         self.result_folder.mkdir(exist_ok=True, parents=True)
         
         print("File:", self.record_path.stem)
