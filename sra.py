@@ -420,22 +420,23 @@ class SeismicRecord:
             temp_ifft_NS_disp = np.fft.ifft(self.fft_record_data["NS_acc"] * temp_H, norm="backward")
             temp_ifft_EW_disp = np.fft.ifft(self.fft_record_data["EW_acc"] * temp_H, norm="backward")
             temp_ifft_UD_disp = np.fft.ifft(self.fft_record_data["UD_acc"] * temp_H, norm="backward")
-            temp_ifft_H_disp = (temp_ifft_NS_disp ** 2 + temp_ifft_EW_disp ** 2) ** (1/2)
             
             temp_ifft_NS_vel = np.fft.ifft(self.fft_record_data["NS_acc"] * temp_H * 1j * temp_omega, norm="backward")
             temp_ifft_EW_vel = np.fft.ifft(self.fft_record_data["EW_acc"] * temp_H * 1j * temp_omega, norm="backward")
             temp_ifft_UD_vel = np.fft.ifft(self.fft_record_data["UD_acc"] * temp_H * 1j * temp_omega, norm="backward")
+            
+            temp_ifft_NS_acc_rel = np.fft.ifft(self.fft_record_data["NS_acc"] * temp_H * -temp_omega**2, norm="backward")
+            temp_ifft_EW_acc_rel = np.fft.ifft(self.fft_record_data["EW_acc"] * temp_H * -temp_omega**2, norm="backward")
+            temp_ifft_UD_acc_rel = np.fft.ifft(self.fft_record_data["UD_acc"] * temp_H * -temp_omega**2, norm="backward")
+            
+            temp_ifft_NS_acc_abs = temp_ifft_NS_acc_rel + self.record_data["NS_acc"]
+            temp_ifft_EW_acc_abs = temp_ifft_EW_acc_rel + self.record_data["EW_acc"]
+            temp_ifft_UD_acc_abs = temp_ifft_UD_acc_rel + self.record_data["UD_acc"]
+
+            temp_ifft_H_disp = (temp_ifft_NS_disp ** 2 + temp_ifft_EW_disp ** 2) ** (1/2)
             temp_ifft_H_vel = (temp_ifft_NS_vel ** 2 + temp_ifft_EW_vel ** 2) ** (1/2)
-            
-            temp_ifft_NS_acc_abs = np.fft.ifft(self.fft_record_data["NS_acc"] * temp_H * -temp_omega**2, norm="backward")
-            temp_ifft_EW_acc_abs = np.fft.ifft(self.fft_record_data["EW_acc"] * temp_H * -temp_omega**2, norm="backward")
-            temp_ifft_UD_acc_abs = np.fft.ifft(self.fft_record_data["UD_acc"] * temp_H * -temp_omega**2, norm="backward")
-            temp_ifft_H_acc_abs = (temp_ifft_NS_acc_abs ** 2 + temp_ifft_EW_acc_abs ** 2) ** (1/2)
-            
-            temp_ifft_NS_acc_rel = temp_ifft_NS_acc_abs + self.record_data["NS_acc"]
-            temp_ifft_EW_acc_rel = temp_ifft_EW_acc_abs + self.record_data["EW_acc"]
-            temp_ifft_UD_acc_rel = temp_ifft_UD_acc_abs + self.record_data["UD_acc"]
             temp_ifft_H_acc_rel = (temp_ifft_NS_acc_rel ** 2 + temp_ifft_EW_acc_rel ** 2) ** (1/2)
+            temp_ifft_H_acc_abs = (temp_ifft_NS_acc_abs ** 2 + temp_ifft_EW_acc_abs ** 2) ** (1/2)
             
             # calcurate absolute maximum value of each response component
             self.response_spectrum_data.loc[i, "NS_acc_resp_abs"] = np.abs(temp_ifft_NS_acc_abs).max()
@@ -725,24 +726,24 @@ class SeismicRecord:
                 axes[i, 0].xaxis.set_ticklabels([])
             
             # annotate max value of holizontal component
-            if temp_export_param == "acc":
+            if temp_export_param == "acc" and temp_comp_index == 0:
 
                 max_value_holizontal = self.record_data_abs_max["H_acc"]
-                axes[0, 0].text(0.95, 0.95, f"Abs. Max of Hol. Comp.: {max_value_holizontal:.2f} cm/s$^2$", 
+                axes[i, 0].text(0.95, 0.95, f"Max of Hol. Comp.: {max_value_holizontal:.2f} cm/s$^2$", 
                                 transform=axes[i, 0].transAxes, verticalalignment="top", 
                                 horizontalalignment="right", fontsize=8, color="k")
             
-            elif temp_export_param == "vel":
+            elif temp_export_param == "vel" and temp_comp_index == 0:
                 
                 max_value_holizontal = self.record_data_abs_max["H_vel"]
-                axes[0, 0].text(0.95, 0.95, f"Abs. Max of Hol. Comp.: {max_value_holizontal:.2f} cm/s", 
+                axes[i, 0].text(0.95, 0.95, f"Max of Hol. Comp.: {max_value_holizontal:.2f} cm/s", 
                                 transform=axes[i, 0].transAxes, verticalalignment="top", 
                                 horizontalalignment="right", fontsize=8, color="k")
                 
-            elif temp_export_param == "disp":
+            elif temp_export_param == "disp" and temp_comp_index == 0:
 
                 max_value_holizontal = self.record_data_abs_max["H_disp"]
-                axes[0, 0].text(0.95, 0.95, f"Abs. Max of Hol. Comp.: {max_value_holizontal:.2f} cm", 
+                axes[i, 0].text(0.95, 0.95, f"Max of Hol. Comp.: {max_value_holizontal:.2f} cm", 
                                 transform=axes[i, 0].transAxes, verticalalignment="top", 
                                 horizontalalignment="right", fontsize=8, color="k")
             
