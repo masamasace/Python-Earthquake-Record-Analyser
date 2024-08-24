@@ -64,6 +64,7 @@ def acc2disp_jma(acc):
 # base class for seismic record
 class SeismicRecord:
     def __init__(self, record_path, record_type="JMA", parzen_width=0, record_interval=0.01, h=0.05, 
+                 adxl_params={"gain": 2 * 980.665 / 2 ** 19, "method": "serial"}, 
                  integration_method="JMA", integration_butterworth_cutoff=0.1, integration_butterworth_order=4,
                  flag_baseline_correction=True, baseline_count_indices= 100, flag_export_csv=True) -> None:
         
@@ -72,6 +73,7 @@ class SeismicRecord:
         self.parzen_width = parzen_width
         self.record_interval = record_interval
         self.h = h
+        self.adxl_params = adxl_params
         self.integration_method = integration_method
         self.integration_butterworth_cutoff = integration_butterworth_cutoff
         self.integration_butterworth_order = integration_butterworth_order
@@ -86,6 +88,8 @@ class SeismicRecord:
         
         print("File:", self.record_path.stem)
         
+        # load acceleration record
+        # self.startime and self.record_data must be defined
         if self.record_type == "JMA":
             encoding_chr = "shift-jis"
             
@@ -271,7 +275,46 @@ class SeismicRecord:
             self.record_data = pd.DataFrame(np.vstack([temp_record_time, temp_record_NS, temp_record_EW, temp_record_UD]).T, 
                                             columns=self.col_names)
             self.record_data[["NS_acc", "EW_acc", "UD_acc"]] = self.record_data[["NS_acc", "EW_acc", "UD_acc"]].astype(float)
+        
+        elif self.record_type == "ADXL":
+
+            encoding_chr = "utf-8"
+
+            temp_record_path = self.record_path
+
+            if self.adxl_params["method"] == "serial":
+
+                # Time: 119990ms, X: 5715, Y: -3663, Z: -2671
+                # Time: 120000ms, X: 5339, Y: -4559, Z: -2553
+                # Time: 120010ms, X: 5437, Y: -4394, Z: -4510
+                
+                temp_col_names = ["Time", "NS_acc", "EW_acc", "UD_acc"]
+                temp_record_data = pd.read_csv(temp_record_path,
+                                                  encoding=encoding_chr, 
+                                                  names=temp_col_names,
+                                                  skiprows=0)
+                
+                temp_end_datetime = temp_record_path.stat().st_mtime
+                temp_end_datetime = datetime.datetime.fromtimestamp(temp_end_datetime)
+                
+                temp_record_data["Time_delta"] = temp_record_data["Time"].str.extract(r"Time: (\d+)ms").astype(int)
+                temp_record_data["Time"] = [temp_end_datetime - datetime.timedelta(milliseconds=i) for i in temp_record_data["Time_delta"][::-1]]
+                temp_record_data["NS_acc"] = temp_record_data["NS_acc"].str.extract(r"X: (-?\d+)").astype(int) * self.adxl_params["gain"]
+                temp_record_data["EW_acc"] = temp_record_data["EW_acc"].str.extract(r"Y: (-?\d+)").astype(int) * self.adxl_params["gain"]
+                temp_record_data["UD_acc"] = temp_record_data["UD_acc"].str.extract(r"Z: (-?\d+)").astype(int) * self.adxl_params["gain"]
+
+                temp_record_data = temp_record_data[["Time", "NS_acc", "EW_acc", "UD_acc"]]
+
+                self.start_time = temp_record_data["Time"].iloc[0]
+                self.record_data = temp_record_data
+
+
+            elif self.adxl_params["method"] == "sd":
+                raise ValueError("Not implemented yet!")
             
+            else:
+                raise ValueError("Invalid obtaining method!")
+
         else:
             raise ValueError("Invalid record type!")
         
@@ -289,6 +332,7 @@ class SeismicRecord:
                         "parzen_width": self.parzen_width,
                         "record_interval": self.record_interval,
                         "h": self.h,
+                        "adxl_params": self.adxl_params,
                         "integration_method": self.integration_method,
                         "integration_butterworth_cutoff": self.integration_butterworth_cutoff,
                         "integration_butterworth_order": self.integration_butterworth_order,
@@ -581,7 +625,7 @@ class SeismicRecord:
     
         
     # export time-series record     
-    def export_time_series_record(self, xlim=[], ylim=[], major_tick_location=[0], export_params = "all", 
+    def export_time_series_record(self, xlim=[], x_axis_type="absolute", ylim=[], major_tick_location=[0], export_params = "all", 
                                   minor_tick_location = [10, 20, 30, 40, 50], force_update=False) -> None:
         """
         Export time-series record as a figure.
@@ -590,6 +634,9 @@ class SeismicRecord:
         ----------
         xlim : list, optional
             The x-axis limits. The default is [].
+        x_axis_type : str
+            The x-axis type. The default is "absolute"
+            available x_axis_type: "absolute", "relative"
         ylim : list, optional
             The y-axis limits. The default is [].
         major_tick_location : list, optional
@@ -606,6 +653,9 @@ class SeismicRecord:
         -------
         None.
         """
+        # check x_axis_type
+        if x_axis_type not in ["absolute", "relative"]:
+            raise ValueError("Invalid x_axis_type!")
 
         # check export_params
         if type(export_params) == str:
@@ -641,11 +691,18 @@ class SeismicRecord:
             if len(xlim) == 0:
                 flag_set_xlim = False
             elif len(xlim) == 2:
-                try:
-                    xlim = [datetime.datetime.strptime(xlim[0], "%Y-%m-%d %H:%M:%S"), datetime.datetime.strptime(xlim[1], "%Y-%m-%d %H:%M:%S")]
-                    flag_set_xlim = True
-                except:
-                    raise ValueError("Invalid xlim!")
+                if x_axis_type == "relative":
+                    if type(xlim[0]) in [int, float] and type(xlim[1]) in [int, float]:
+                        xlim = [float(xlim[0]), float(xlim[1])]
+                        flag_set_xlim = True
+                    else:
+                        raise ValueError("Invalid xlim!")
+                elif x_axis_type == "absolute":
+                    try:
+                        xlim = [datetime.datetime.strptime(xlim[0], "%Y-%m-%d %H:%M:%S"), datetime.datetime.strptime(xlim[1], "%Y-%m-%d %H:%M:%S")]
+                        flag_set_xlim = True
+                    except:
+                        raise ValueError("Invalid xlim!")
         else: 
             raise ValueError("Invalid xlim!")
         
@@ -679,8 +736,12 @@ class SeismicRecord:
             temp_col_name =  temp_comp_name[temp_comp_index] + "_"  + temp_export_param
 
             # plot time-series record
-            axes[i, 0].plot(self.record_data["Time"], self.record_data[temp_col_name], color=temp_color, linewidth=0.5)
-
+            if x_axis_type == "absolute":
+                axes[i, 0].plot(self.record_data["Time"], self.record_data[temp_col_name], color=temp_color, linewidth=0.5)
+            elif x_axis_type == "relative":
+                temp_time = np.arange(len(self.record_data)) * self.record_interval
+                axes[i, 0].plot(temp_time, self.record_data[temp_col_name], color=temp_color, linewidth=0.5)        
+            
             # set xlim and ylim
             if flag_set_xlim:
                 axes[i, 0].set_xlim(xlim)
@@ -715,8 +776,9 @@ class SeismicRecord:
             axes[i, 0].spines["left"].set_linewidth(0.5)
             axes[i, 0].xaxis.set_tick_params(width=0.5)
             axes[i, 0].yaxis.set_tick_params(width=0.5)
-            axes[i, 0].xaxis.set_major_locator(mdates.SecondLocator(bysecond=major_tick_location))
-            axes[i, 0].xaxis.set_minor_locator(mdates.SecondLocator(bysecond=minor_tick_location))
+            if x_axis_type == "absolute":
+                axes[i, 0].xaxis.set_major_locator(mdates.SecondLocator(bysecond=major_tick_location))
+                axes[i, 0].xaxis.set_minor_locator(mdates.SecondLocator(bysecond=minor_tick_location))
 
             if i == len(export_params)*3 - 1:
                 axes[i, 0].tick_params(axis="x", which="major", labelsize=8)
