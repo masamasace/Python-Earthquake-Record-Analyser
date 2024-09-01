@@ -314,6 +314,27 @@ class SeismicRecord:
             
             else:
                 raise ValueError("Invalid obtaining method!")
+        
+        elif self.record_type == "ASW":
+
+            encoding_chr = "shift-jis"
+
+            with open(self.record_path, "r", encoding=encoding_chr) as f:
+                for i, line in enumerate(f):
+                    if i == 2:
+                        temp_start_date = line.split(",")[1].replace('"', "").replace(" ", "").replace("\n", "")
+                        temp_start_time = line.split(",")[2].replace('"', "").replace(" ", "").replace("\n", "")
+                        temp_start_time_format = "%Y/%m/%d %H:%M:%S"
+                        self.start_time = datetime.datetime.strptime(temp_start_date + " " + temp_start_time, temp_start_time_format)
+                        print(self.start_time)
+
+            temp_col_names = ["Time", "NS_acc", "EW_acc", "UD_acc"]
+            self.record_data = pd.read_csv(self.record_path,
+                                           encoding=encoding_chr, 
+                                           names=temp_col_names,
+                                           skiprows=14)
+            
+            raise ValueError("Not implemented yet!")
 
         else:
             raise ValueError("Invalid record type!")
