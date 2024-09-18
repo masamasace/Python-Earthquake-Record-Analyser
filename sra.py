@@ -8,6 +8,8 @@ import scipy.signal as ss
 import scipy.integrate as si
 import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
+import re
+import json
 
 
 plt.rcParams["font.family"] = "Arial"
@@ -62,26 +64,32 @@ def acc2disp_jma(acc):
 # base class for seismic record
 class SeismicRecord:
     def __init__(self, record_path, record_type="JMA", parzen_width=0, record_interval=0.01, h=0.05, 
+                 adxl_params={"gain": 2 * 980.665 / 2 ** 19, "method": "serial"}, 
                  integration_method="JMA", integration_butterworth_cutoff=0.1, integration_butterworth_order=4,
-                 flag_baseline_correction=True, flag_export_csv=True) -> None:
+                 flag_baseline_correction=True, baseline_count_indices= 100, flag_export_csv=True) -> None:
         
         self.record_type = record_type
         self.record_path = Path(record_path).resolve()
         self.parzen_width = parzen_width
         self.record_interval = record_interval
         self.h = h
+        self.adxl_params = adxl_params
         self.integration_method = integration_method
         self.integration_butterworth_cutoff = integration_butterworth_cutoff
         self.integration_butterworth_order = integration_butterworth_order
         self.flag_baseline_correction = flag_baseline_correction
+        self.baseline_count_indices = baseline_count_indices
+        self.baseline_offset_values = pd.DataFrame()
         self.flag_export_csv = flag_export_csv
         
         # create result folder
-        self.result_folder = self.record_path.parent / "result"
+        self.result_folder = self.record_path.parents[1] / "res" / self.record_path.name
         self.result_folder.mkdir(exist_ok=True, parents=True)
         
         print("File:", self.record_path.stem)
         
+        # load acceleration record
+        # self.startime and self.record_data must be defined
         if self.record_type == "JMA":
             encoding_chr = "shift-jis"
             
@@ -95,25 +103,40 @@ class SeismicRecord:
                         break
             
             # load acceleration record
-            self.col_names = ["NS_acc", "EW_acc", "UD_acc"]
+            temp_col_names = ["NS_acc", "EW_acc", "UD_acc"]
             self.record_data = pd.read_csv(self.record_path,
                                            encoding=encoding_chr, 
-                                           names=self.col_names,
+                                           names=temp_col_names,
                                            skiprows=7)
             
             # Add time column
             self.record_data["Time"] = [self.start_time + datetime.timedelta(seconds=i * self.record_interval) for i in range(len(self.record_data))]
 
-            self.record_data[self.col_names] = self.record_data[self.col_names].astype(float)
+            self.record_data[temp_col_names] = self.record_data[temp_col_names].astype(float)
             self.record_data = self.record_data[["Time", "NS_acc", "EW_acc", "UD_acc"]]
             
                     
         elif self.record_type == "NIED":
+
+            # file extension check and define file path for each component
+            if self.record_path.suffix in [".NS", ".EW", ".UD"]:
+                temp_record_path_NS = self.record_path.parent / (self.record_path.stem + ".NS")
+                temp_record_path_EW = self.record_path.parent / (self.record_path.stem + ".EW")
+                temp_record_path_UD = self.record_path.parent / (self.record_path.stem + ".UD")
+
+            # KiK-net format: suffix 1 means the sensor located in the ground
+            elif self.record_path.suffix in [".NS1", ".EW1", ".UD1"]:
+                temp_record_path_NS = self.record_path.parent / (self.record_path.stem + ".NS1")
+                temp_record_path_EW = self.record_path.parent / (self.record_path.stem + ".EW1")
+                temp_record_path_UD = self.record_path.parent / (self.record_path.stem + ".UD1")
             
-            # prepare file path for each component
-            temp_record_path_NS = self.record_path.parent / (self.record_path.stem + ".NS")
-            temp_record_path_EW = self.record_path.parent / (self.record_path.stem + ".EW")
-            temp_record_path_UD = self.record_path.parent / (self.record_path.stem + ".UD")
+            # KiK-net format: suffix 2 means the sensor located on the ground
+            elif self.record_path.suffix in [".NS2", ".EW2", ".UD2"]:
+                temp_record_path_NS = self.record_path.parent / (self.record_path.stem + ".NS2")
+                temp_record_path_EW = self.record_path.parent / (self.record_path.stem + ".EW2")
+                temp_record_path_UD = self.record_path.parent / (self.record_path.stem + ".UD2")
+            else:
+                raise ValueError("Invalid file extension!")
             
             temp_record_paths = [temp_record_path_NS, temp_record_path_EW, temp_record_path_UD]
             
@@ -149,10 +172,11 @@ class SeismicRecord:
             temp_record_EW = temp_record[1][1]
             temp_record_UD = temp_record[2][1]
             
-            self.col_names = ["Time", "NS_acc", "EW_acc", "UD_acc"]
+            temp_col_names = ["Time", "NS_acc", "EW_acc", "UD_acc"]
             self.record_data = pd.DataFrame(np.vstack([temp_record_time, temp_record_NS, temp_record_EW, temp_record_UD]).T, 
-                                            columns=self.col_names)
-            
+                                            columns=temp_col_names)
+            self.record_data[["NS_acc", "EW_acc", "UD_acc"]] = self.record_data[["NS_acc", "EW_acc", "UD_acc"]].astype(float)
+        
         elif self.record_type == "HG":
             
             encoding_chr = "shift-jis"
@@ -176,41 +200,192 @@ class SeismicRecord:
                         break
             
             # load acceleration record
-            self.col_names = ["UD_acc", "NS_acc", "EW_acc"]
+            temp_col_names = ["UD_acc", "NS_acc", "EW_acc"]
             self.record_data = pd.read_csv(self.record_path,
                                            encoding=encoding_chr, 
-                                           names=self.col_names,
+                                           names=temp_col_names,
                                            skiprows=37)
             
             # Add time column
             self.record_data["Time"] = [self.start_time + datetime.timedelta(seconds=i * self.record_interval) for i in range(len(self.record_data))]
 
-            self.record_data[self.col_names] = self.record_data[self.col_names].astype(float)
+            self.record_data[temp_col_names] = self.record_data[temp_col_names].astype(float)
             self.record_data = self.record_data[["Time", "NS_acc", "EW_acc", "UD_acc"]] 
             
-            self.col_names = self.record_data.columns.values
-            
-        elif self.record_type == "JR-Takatori":
+        # RTRI (Japan Railway Technical Research Institute) format for JR Takatori Record in 1995 Kobe EQ
+        # Reference: http://wiki.arch.ues.tmu.ac.jp/KyoshinTebiki/index.php?%C3%F8%CC%BE%A4%CA%B6%AF%BF%CC%B5%AD%CF%BF#v13066f8
         
-            pass           
+        elif self.record_type == "JR":
+        
+            encoding_chr = "utf-8"
             
+            temp_record_path_NS = self.record_path.parent / (self.record_path.stem + ".001")
+            temp_record_path_EW = self.record_path.parent / (self.record_path.stem + ".002")
+            temp_record_path_UD = self.record_path.parent / (self.record_path.stem + ".003")
+            
+            temp_record_paths = [temp_record_path_NS, temp_record_path_EW, temp_record_path_UD]
+            
+            temp_start_time_list =[]
+            temp_record = []
+            
+            for temp_each_record_path in temp_record_paths:
+                
+                with open(temp_each_record_path, "r", encoding=encoding_chr) as f:
+                    for i, line in enumerate(f):
+                        line = re.sub(r"\s+", " ", line)
+                        
+                        # Load start time info
+                        if i == 0:
+                            temp_start_date_str = line.split(" ")[0]
+                            temp_start_time_str = line.split(" ")[2]
+                            temp_start_date_time_str = temp_start_date_str + temp_start_time_str
+                            temp_start_date_time_format = "%y%m%d%H.%M"
+                            temp_start_time_list.append(datetime.datetime.strptime(temp_start_date_time_str, temp_start_date_time_format))
+                        # Load gain info
+                        elif i == 1:
+                            temp_max_value = float(line.split(" ")[3])
+                            break
+                    
+                # Load acceleration record
+                colspecs = [(10*i, 10*i+10) for i in range(8)]
+                temp_each_record_data = pd.read_fwf(temp_each_record_path, colspecs=colspecs, skiprows=2, header=None)
+                temp_each_record_data = temp_each_record_data.dropna(axis=0)
+                temp_each_record_data = temp_each_record_data.values.T.flatten("F")
+                temp_each_record_data = temp_each_record_data.astype(float)
+                temp_each_record_data_max = np.max(temp_each_record_data)
+                temp_gain = temp_max_value / temp_each_record_data_max
+                temp_each_record_data = temp_each_record_data * temp_gain
+                
+                temp_record.append(temp_each_record_data)
+                                        
+            # check if the start time is the same
+            if len(set(temp_start_time_list)) != 1:
+                raise Warning("Start time is not the same! Consider the start time of the first component.")
+            
+            self.start_time = temp_start_time_list[0]
+            
+            self.record_interval = 0.01
+            temp_record_time = np.array([self.start_time + datetime.timedelta(seconds=i * self.record_interval) for i in range(len(temp_record[0]))])
+            
+            temp_record_NS = temp_record[0]
+            temp_record_EW = temp_record[1]
+            temp_record_UD = temp_record[2]
+            
+            self.col_names = ["Time", "NS_acc", "EW_acc", "UD_acc"]
+            self.record_data = pd.DataFrame(np.vstack([temp_record_time, temp_record_NS, temp_record_EW, temp_record_UD]).T, 
+                                            columns=self.col_names)
+            self.record_data[["NS_acc", "EW_acc", "UD_acc"]] = self.record_data[["NS_acc", "EW_acc", "UD_acc"]].astype(float)
+        
+        elif self.record_type == "ADXL":
+
+            encoding_chr = "utf-8"
+
+            temp_record_path = self.record_path
+
+            if self.adxl_params["method"] == "serial":
+
+                # Time: 119990ms, X: 5715, Y: -3663, Z: -2671
+                # Time: 120000ms, X: 5339, Y: -4559, Z: -2553
+                # Time: 120010ms, X: 5437, Y: -4394, Z: -4510
+                
+                temp_col_names = ["Time", "NS_acc", "EW_acc", "UD_acc"]
+                temp_record_data = pd.read_csv(temp_record_path,
+                                                  encoding=encoding_chr, 
+                                                  names=temp_col_names,
+                                                  skiprows=0)
+                
+                temp_end_datetime = temp_record_path.stat().st_mtime
+                temp_end_datetime = datetime.datetime.fromtimestamp(temp_end_datetime)
+                
+                temp_record_data["Time_delta"] = temp_record_data["Time"].str.extract(r"Time: (\d+)ms").astype(int)
+                temp_record_data["Time"] = [temp_end_datetime - datetime.timedelta(milliseconds=i) for i in temp_record_data["Time_delta"][::-1]]
+                temp_record_data["NS_acc"] = temp_record_data["NS_acc"].str.extract(r"X: (-?\d+)").astype(int) * self.adxl_params["gain"]
+                temp_record_data["EW_acc"] = temp_record_data["EW_acc"].str.extract(r"Y: (-?\d+)").astype(int) * self.adxl_params["gain"]
+                temp_record_data["UD_acc"] = temp_record_data["UD_acc"].str.extract(r"Z: (-?\d+)").astype(int) * self.adxl_params["gain"]
+
+                temp_record_data = temp_record_data[["Time", "NS_acc", "EW_acc", "UD_acc"]]
+
+                self.start_time = temp_record_data["Time"].iloc[0]
+                self.record_data = temp_record_data
+
+
+            elif self.adxl_params["method"] == "sd":
+                raise ValueError("Not implemented yet!")
+            
+            else:
+                raise ValueError("Invalid obtaining method!")
+        
+        elif self.record_type == "ASW":
+
+            encoding_chr = "shift-jis"
+
+            with open(self.record_path, "r", encoding=encoding_chr) as f:
+                for i, line in enumerate(f):
+                    if i == 2:
+                        temp_start_date = line.split(",")[1].replace('"', "").replace(" ", "").replace("\n", "")
+                        temp_start_time = line.split(",")[2].replace('"', "").replace(" ", "").replace("\n", "")
+                        temp_start_time_format = "%Y/%m/%d %H:%M:%S"
+                        self.start_time = datetime.datetime.strptime(temp_start_date + " " + temp_start_time, temp_start_time_format)
+                        print(self.start_time)
+
+            temp_col_names = ["Time", "NS_acc", "EW_acc", "UD_acc"]
+            self.record_data = pd.read_csv(self.record_path,
+                                           encoding=encoding_chr, 
+                                           names=temp_col_names,
+                                           skiprows=14)
+            
+            raise ValueError("Not implemented yet!")
+
         else:
             raise ValueError("Invalid record type!")
         
+        self._validate_record_data()
         self._calcurate_additional_parameter()
         
         # export time series record.
         if self.flag_export_csv:
+
+            temp_json_path = self.result_folder / (self.record_path.stem + "_params.json")
+            temp_json = {"record_type": self.record_type,
+                        "record_path": str(self.record_path),
+                        "start_time": self.start_time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "record_data_abs_max" : self.record_data_abs_max.to_dict(),
+                        "parzen_width": self.parzen_width,
+                        "record_interval": self.record_interval,
+                        "h": self.h,
+                        "adxl_params": self.adxl_params,
+                        "integration_method": self.integration_method,
+                        "integration_butterworth_cutoff": self.integration_butterworth_cutoff,
+                        "integration_butterworth_order": self.integration_butterworth_order,
+                        "flag_baseline_correction": self.flag_baseline_correction,
+                        "baseline_count_indices": self.baseline_count_indices,
+                        "baseline_offset_values": self.baseline_offset_values.to_dict(),
+                        "flag_export_csv": self.flag_export_csv}
+            
+            with open(temp_json_path, "w") as f:
+                json.dump(temp_json, f, indent=4)
+
             
             temp_time_series_csv_path = self.result_folder / (self.record_path.stem + "_timeseries.csv")
             self.record_data.to_csv(temp_time_series_csv_path, index=False)
             
             temp_fft_csv_path = self.result_folder / (self.record_path.stem + "_fft.csv")
-            self.fft_record_data.to_csv(temp_fft_csv_path, index=False)
+            self.fft_record_data.abs().to_csv(temp_fft_csv_path, index=False)
             
             temp_response_spectrum_csv_path = self.result_folder / (self.record_path.stem + "_response_spectrum.csv")
             self.response_spectrum_data.to_csv(temp_response_spectrum_csv_path, index=False)
 
+    def _validate_record_data(self):
+
+        # check if the record data includes NaN
+        if self.record_data.isnull().values.any():
+            raise ValueError("Record data includes NaN!")
+        
+        # check if all the record is numeric
+        if not self.record_data.map(np.isreal).all().all():
+            raise ValueError("Record data includes non-numeric value!")
+        
+        print("finish validate record data!")
     
     def _calcurate_additional_parameter(self):
                 
@@ -220,7 +395,11 @@ class SeismicRecord:
         # baseline correction
         if self.flag_baseline_correction:
             
-            temp_NS, temp_EW, temp_UD = self._baseline_correction()
+            self.baseline_offset_values, (temp_NS, temp_EW, temp_UD) = self._baseline_correction()
+
+            self.record_data["NS_acc_raw"] = self.record_data["NS_acc"].copy()
+            self.record_data["EW_acc_raw"] = self.record_data["EW_acc"].copy()
+            self.record_data["UD_acc_raw"] = self.record_data["UD_acc"].copy()
             
             self.record_data["NS_acc"] = temp_NS
             self.record_data["EW_acc"] = temp_EW
@@ -228,24 +407,46 @@ class SeismicRecord:
             
             print("finish baseline correction!")
         
-        # calcurate holizontal component
-        self.record_data["H_acc"] = (self.record_data["NS_acc"] ** 2 + self.record_data["EW_acc"] ** 2) ** (1/2)
+        else:
+            self.record_data["NS_acc_raw"] = self.record_data["NS_acc"].copy()
+            self.record_data["EW_acc_raw"] = self.record_data["EW_acc"].copy()
+            self.record_data["UD_acc_raw"] = self.record_data["UD_acc"].copy()
+        
+        # reorganize column names
+        self.record_data = self.record_data[["Time", "NS_acc", "EW_acc", "UD_acc", "NS_acc_raw", "EW_acc_raw", "UD_acc_raw"]]
+        self.col_names_all = self.record_data.columns.values
         
         # calcurate FFT
         self._calcurate_fft()
         
         # compute velocity and displacement
         self._calcurate_velocity_displacement()
+
+        # calcurate holizontal component
+        self.record_data["H_acc"] = (self.record_data["NS_acc"] ** 2 + self.record_data["EW_acc"] ** 2) ** (1/2)
+        self.record_data["3D_acc"] = (self.record_data["NS_acc"] ** 2 + self.record_data["EW_acc"] ** 2 + self.record_data["UD_acc"] ** 2) ** (1/2)
+        self.record_data["H_vel"] = (self.record_data["NS_vel"] ** 2 + self.record_data["EW_vel"] ** 2) ** (1/2)
+        self.record_data["3D_vel"] = (self.record_data["NS_vel"] ** 2 + self.record_data["EW_vel"] ** 2 + self.record_data["UD_vel"] ** 2) ** (1/2)
+        self.record_data["H_disp"] = (self.record_data["NS_disp"] ** 2 + self.record_data["EW_disp"] ** 2) ** (1/2)
+        self.record_data["3D_disp"] = (self.record_data["NS_disp"] ** 2 + self.record_data["EW_disp"] ** 2 + self.record_data["UD_disp"] ** 2) ** (1/2)
         
         # calcurate absolute maximum value with sign in each component
-        temp_record_data_abs_max = self.record_data.loc[self.record_data[self.col_names[1:]].abs().idxmax()]
-        
-        # create dictionary for each component
-        self.record_data_abs_max = np.array([temp_record_data_abs_max.iloc[i, i+1] for i in range(0, len(temp_record_data_abs_max))])
-        
+        # create col name list except time and _raw columns
+        temp_col_name = [col_name for col_name in self.record_data.columns.values if "_raw" not in col_name] 
+        temp_col_name = temp_col_name[1:]
+
+        temp_record_data_abs_max = self.record_data.loc[self.record_data[temp_col_name].abs().idxmax(), temp_col_name]
+        self.record_data_abs_max = temp_record_data_abs_max.copy()
+
+        # keep only 1st row and drop subsequent rows
+        self.record_data_abs_max = self.record_data_abs_max.iloc[0]
+
+        for i in range(len(temp_col_name)):
+            self.record_data_abs_max[temp_col_name[i]] = temp_record_data_abs_max.iloc[i, i]
+    
         for i in range(len(self.fft_col_names[1:])):
-                temp_col_name = self.fft_col_names[1 + i] + "_smoothed"       
-                self.fft_record_data[temp_col_name] = self.fft_record_data[self.fft_col_names[1 + i]]
+            temp_col_name = self.fft_col_names[1 + i] + "_smoothed"       
+            self.fft_record_data[temp_col_name] = self.fft_record_data[self.fft_col_names[1 + i]]
         
         # TODO:Viewwaveとの整合性が取れていない
         # apply parzen window
@@ -262,11 +463,15 @@ class SeismicRecord:
         print("finish apply Parzen window!")
         
         # compute response spectrum
-        self.response_spectrum_data = pd.DataFrame({"nFreq": [], "NS_acc_resp": [], "EW_acc_resp": [], "UD_acc_resp": [], 
-                                              "NS_vel_resp": [], "EW_vel_resp": [], "UD_vel_resp": [],
-                                              "NS_disp_resp": [], "EW_disp_resp": [], "UD_disp_resp": []})
+        self.response_spectrum_data = pd.DataFrame({"nFreq": [], "nPeriod": [],
+                                                    "NS_acc_resp_abs": [], "EW_acc_resp_abs": [], "UD_acc_resp_abs": [], "H_acc_resp_abs": [],
+                                                    "NS_acc_resp_rel": [], "EW_acc_resp_rel": [], "UD_acc_resp_rel": [], "H_acc_resp_rel": [],
+                                                    "NS_vel_resp": [], "EW_vel_resp": [], "UD_vel_resp": [], "H_vel_resp": [],
+                                                    "NS_disp_resp": [], "EW_disp_resp": [], "UD_disp_resp": [], "H_disp_resp": []})
                                                 
         self.response_spectrum_data["nFreq"] = np.logspace(np.log10(0.05), np.log10(20), 200)
+        self.response_spectrum_data["nPeriod"] = 1 / self.response_spectrum_data["nFreq"]
+        
         temp_omega = 2 * np.pi * self.fft_record_data["Freq"]
         
         for i, n_freq in enumerate(self.response_spectrum_data["nFreq"]):
@@ -285,30 +490,39 @@ class SeismicRecord:
             temp_ifft_EW_vel = np.fft.ifft(self.fft_record_data["EW_acc"] * temp_H * 1j * temp_omega, norm="backward")
             temp_ifft_UD_vel = np.fft.ifft(self.fft_record_data["UD_acc"] * temp_H * 1j * temp_omega, norm="backward")
             
-            temp_ifft_NS_acc_abs = np.fft.ifft(self.fft_record_data["NS_acc"] * temp_H * -temp_omega**2, norm="backward")
-            temp_ifft_EW_acc_abs = np.fft.ifft(self.fft_record_data["EW_acc"] * temp_H * -temp_omega**2, norm="backward")
-            temp_ifft_UD_acc_abs = np.fft.ifft(self.fft_record_data["UD_acc"] * temp_H * -temp_omega**2, norm="backward")
+            temp_ifft_NS_acc_rel = np.fft.ifft(self.fft_record_data["NS_acc"] * temp_H * -temp_omega**2, norm="backward")
+            temp_ifft_EW_acc_rel = np.fft.ifft(self.fft_record_data["EW_acc"] * temp_H * -temp_omega**2, norm="backward")
+            temp_ifft_UD_acc_rel = np.fft.ifft(self.fft_record_data["UD_acc"] * temp_H * -temp_omega**2, norm="backward")
             
-            temp_ifft_NS_acc_rel = temp_ifft_NS_acc_abs + self.record_data["NS_acc"]
-            temp_ifft_EW_acc_rel = temp_ifft_EW_acc_abs + self.record_data["EW_acc"]
-            temp_ifft_UD_acc_rel = temp_ifft_UD_acc_abs + self.record_data["UD_acc"]
+            temp_ifft_NS_acc_abs = temp_ifft_NS_acc_rel + self.record_data["NS_acc"]
+            temp_ifft_EW_acc_abs = temp_ifft_EW_acc_rel + self.record_data["EW_acc"]
+            temp_ifft_UD_acc_abs = temp_ifft_UD_acc_rel + self.record_data["UD_acc"]
+
+            temp_ifft_H_disp = (temp_ifft_NS_disp ** 2 + temp_ifft_EW_disp ** 2) ** (1/2)
+            temp_ifft_H_vel = (temp_ifft_NS_vel ** 2 + temp_ifft_EW_vel ** 2) ** (1/2)
+            temp_ifft_H_acc_rel = (temp_ifft_NS_acc_rel ** 2 + temp_ifft_EW_acc_rel ** 2) ** (1/2)
+            temp_ifft_H_acc_abs = (temp_ifft_NS_acc_abs ** 2 + temp_ifft_EW_acc_abs ** 2) ** (1/2)
             
             # calcurate absolute maximum value of each response component
             self.response_spectrum_data.loc[i, "NS_acc_resp_abs"] = np.abs(temp_ifft_NS_acc_abs).max()
             self.response_spectrum_data.loc[i, "EW_acc_resp_abs"] = np.abs(temp_ifft_EW_acc_abs).max()
             self.response_spectrum_data.loc[i, "UD_acc_resp_abs"] = np.abs(temp_ifft_UD_acc_abs).max()
+            self.response_spectrum_data.loc[i, "H_acc_resp_abs"] = np.abs(temp_ifft_H_acc_abs).max()
             
             self.response_spectrum_data.loc[i, "NS_acc_resp_rel"] = np.abs(temp_ifft_NS_acc_rel).max()
             self.response_spectrum_data.loc[i, "EW_acc_resp_rel"] = np.abs(temp_ifft_EW_acc_rel).max()
             self.response_spectrum_data.loc[i, "UD_acc_resp_rel"] = np.abs(temp_ifft_UD_acc_rel).max()
+            self.response_spectrum_data.loc[i, "H_acc_resp_rel"] = np.abs(temp_ifft_H_acc_rel).max()
             
             self.response_spectrum_data.loc[i, "NS_vel_resp"] = np.abs(temp_ifft_NS_vel).max()
             self.response_spectrum_data.loc[i, "EW_vel_resp"] = np.abs(temp_ifft_EW_vel).max()
             self.response_spectrum_data.loc[i, "UD_vel_resp"] = np.abs(temp_ifft_UD_vel).max()
+            self.response_spectrum_data.loc[i, "H_vel_resp"] = np.abs(temp_ifft_H_vel).max()
             
             self.response_spectrum_data.loc[i, "NS_disp_resp"] = np.abs(temp_ifft_NS_disp).max()
             self.response_spectrum_data.loc[i, "EW_disp_resp"] = np.abs(temp_ifft_EW_disp).max()
             self.response_spectrum_data.loc[i, "UD_disp_resp"] = np.abs(temp_ifft_UD_disp).max()
+            self.response_spectrum_data.loc[i, "H_disp_resp"] = np.abs(temp_ifft_H_disp).max()
             
         print("finish calcurate Response Spectrum!")
 
@@ -317,16 +531,15 @@ class SeismicRecord:
     def _baseline_correction(self):
         
         # calcurate baseline
-        temp_baseline_NS = np.mean(self.record_data["NS_acc"].iloc[:100])
-        temp_baseline_EW = np.mean(self.record_data["EW_acc"].iloc[:100])
-        temp_baseline_UD = np.mean(self.record_data["UD_acc"].iloc[:100])
-        
+        temp_record_data = self.record_data[["NS_acc", "EW_acc", "UD_acc"]]
+        temp_baseline_offset_values = temp_record_data.iloc[:self.baseline_count_indices].mean()
+
         # apply baseline correction
-        temp_NS = self.record_data["NS_acc"] - temp_baseline_NS
-        temp_EW = self.record_data["EW_acc"] - temp_baseline_EW
-        temp_UD = self.record_data["UD_acc"] - temp_baseline_UD
-        
-        return (temp_NS, temp_EW, temp_UD)
+        temp_NS = self.record_data["NS_acc"] - temp_baseline_offset_values["NS_acc"]
+        temp_EW = self.record_data["EW_acc"] - temp_baseline_offset_values["EW_acc"]
+        temp_UD = self.record_data["UD_acc"] - temp_baseline_offset_values["UD_acc"]
+
+        return (temp_baseline_offset_values, (temp_NS, temp_EW, temp_UD))
         
         
     def _calcurate_fft(self):
@@ -337,7 +550,7 @@ class SeismicRecord:
         
         temp_freq = np.fft.fftfreq(len(temp_record_data), d=self.record_interval)
         self.freq_interval = temp_freq[1] - temp_freq[0]
-        
+
         temp_fft_record_data = np.fft.fft(temp_record_data, norm="backward", axis=0)
         
         # stack temp_freq and temp_fft_record_data
@@ -398,14 +611,14 @@ class SeismicRecord:
         else:
             raise ValueError("Invalid integration method!")
         
-        self.col_names = self.record_data.columns.values
+        self.col_names_all = self.record_data.columns.values
         print("finish calcurate Velocity and Displacement!")
     
     
     # get record data
     def get_abs_max(self):
 
-        return (self.col_names, self.record_data_abs_max)
+        return (self.col_names_in_use, self.record_data_abs_max)
 
 
     # get start time
@@ -433,13 +646,63 @@ class SeismicRecord:
     
         
     # export time-series record     
-    def export_time_series_record(self, xlim=[], ylim=[], second_locator=[0], force_update=False) -> None:
+    def export_time_series_record(self, xlim=[], x_axis_type="absolute", ylim=[], major_tick_location=[0], export_params = "all", 
+                                  minor_tick_location = [10, 20, 30, 40, 50], force_update=False) -> None:
+        """
+        Export time-series record as a figure.
         
-        fig_name = self.result_folder / (self.record_path.stem + "_timeseries.png")
+        Parameters
+        ----------
+        xlim : list, optional
+            The x-axis limits. The default is [].
+        x_axis_type : str
+            The x-axis type. The default is "absolute"
+            available x_axis_type: "absolute", "relative"
+        ylim : list, optional
+            The y-axis limits. The default is [].
+        major_tick_location : list, optional
+            The major tick locations. The default is [0].
+        minor_tick_location : list, optional
+            The minor tick locations. The default is [10, 20, 30, 40, 50].
+        export_params : str or list, optional
+            The parameters to export. The default is "all".
+            available export_params: "all", "acc", "vel", "disp", list containing any combination of "acc", "vel", "disp"
+        force_update : bool, optional
+            Force update the figure. The default is False.
+
+        Returns
+        -------
+        None.
+        """
+        # check x_axis_type
+        if x_axis_type not in ["absolute", "relative"]:
+            raise ValueError("Invalid x_axis_type!")
+
+        # check export_params
+        if type(export_params) == str:
+            if export_params == "all":
+                export_params = ["acc", "vel", "disp"]
+            elif export_params == "acc":
+                export_params = ["acc"]
+            elif export_params == "vel":
+                export_params = ["vel"]
+            elif export_params == "disp":
+                export_params = ["disp"]
+            else:
+                raise ValueError("Invalid export_params!")
+        elif type(export_params) == list:
+            for i in export_params:
+                if i not in ["acc", "vel", "disp"]:
+                    raise ValueError("Invalid export_params!")
         
+        # flatten export_params to string
+        fig_name_suffix = "-".join(export_params)
+        fig_name =  self.result_folder / (self.record_path.stem + "_timeseries_" + fig_name_suffix + ".png")
+
+        # check if the file already exists
         if not force_update:
-            # check if the file already exists
             if fig_name.exists():
+                print("The file already exists!")
                 return
         
         flag_set_xlim = False
@@ -449,63 +712,84 @@ class SeismicRecord:
             if len(xlim) == 0:
                 flag_set_xlim = False
             elif len(xlim) == 2:
-                try:
-                    xlim = [datetime.datetime.strptime(xlim[0], "%H:%M:%S"), datetime.datetime.strptime(xlim[1], "%H:%M:%S")]
-                    flag_set_xlim = True
-                except:
-                    raise ValueError("Invalid xlim!")
+                if x_axis_type == "relative":
+                    if type(xlim[0]) in [int, float] and type(xlim[1]) in [int, float]:
+                        xlim = [float(xlim[0]), float(xlim[1])]
+                        flag_set_xlim = True
+                    else:
+                        raise ValueError("Invalid xlim!")
+                elif x_axis_type == "absolute":
+                    try:
+                        xlim = [datetime.datetime.strptime(xlim[0], "%Y-%m-%d %H:%M:%S"), datetime.datetime.strptime(xlim[1], "%Y-%m-%d %H:%M:%S")]
+                        flag_set_xlim = True
+                    except:
+                        raise ValueError("Invalid xlim!")
         else: 
             raise ValueError("Invalid xlim!")
         
-        if len(ylim) == 0:
-            ylim = [np.max(np.abs(self.record_data_abs_max[0:3])), np.max(np.abs(self.record_data_abs_max[4:7])), np.max(np.abs(self.record_data_abs_max[7:]))]
-        elif len(ylim) != 3:
-            raise ValueError("Invalid ylim!")
+        if type(ylim) == list:
+            if len(ylim) == 0:
+                temp_acc_max = self.record_data_abs_max[["NS_acc", "EW_acc", "UD_acc"]].abs().max()
+                temp_vel_max = self.record_data_abs_max[["NS_vel", "EW_vel", "UD_vel"]].abs().max()
+                temp_disp_max = self.record_data_abs_max[["NS_disp", "EW_disp", "UD_disp"]].abs().max()
+                temp_abs_max = self.record_data_abs_max.drop(["H_acc"])
+                ylim = [temp_acc_max, temp_vel_max, temp_disp_max]
+                ylim = [temp_max * 1.1 for temp_max in ylim]
+            elif len(ylim) == 3:
+                pass
+            else:
+                raise ValueError("Invalid ylim!")
         
         # setup figure
-        fig, axes = setup_figure(num_row=9, hspace=.125, width=8, height=12)
-        
-        # plot time-series record
-        axes[0, 0].plot(self.record_data["Time"], self.record_data["NS_acc"], "r", linewidth=0.5)
-        axes[1, 0].plot(self.record_data["Time"], self.record_data["EW_acc"], "g", linewidth=0.5)
-        axes[2, 0].plot(self.record_data["Time"], self.record_data["UD_acc"], "b", linewidth=0.5)
-        axes[3, 0].plot(self.record_data["Time"], self.record_data["NS_vel"], "r", linewidth=0.5)
-        axes[4, 0].plot(self.record_data["Time"], self.record_data["EW_vel"], "g", linewidth=0.5)
-        axes[5, 0].plot(self.record_data["Time"], self.record_data["UD_vel"], "b", linewidth=0.5)
-        axes[6, 0].plot(self.record_data["Time"], self.record_data["NS_disp"], "r", linewidth=0.5)
-        axes[7, 0].plot(self.record_data["Time"], self.record_data["EW_disp"], "g", linewidth=0.5)
-        axes[8, 0].plot(self.record_data["Time"], self.record_data["UD_disp"], "b", linewidth=0.5)
-        
-        y_label = [r"NS Acc. (cm/s$^2$)", r"EW Acc. (cm/s$^2$)", r"UD Acc. (cm/s$^2$)",
-                   r"NS Vel. (cm/s)", r"EW Vel. (cm/s)", r"UD Vel. (cm/s)",
-                   r"NS Disp. (cm)", r"EW Disp. (cm)", r"UD Disp. (cm)"]
-        
-        temp_max_values = np.append(self.record_data_abs_max[:3], self.record_data_abs_max[4:])
-        
-        # change figure style
-        for i in range(9):
+        fig, axes = setup_figure(num_row=len(export_params)*3, hspace=.125, width=8, height=len(export_params)*4)
+
+        color_list = ["r", "g", "b"]
+        temp_comp_name = ["NS", "EW", "UD"]
+
+        for i in range(len(export_params)*3):
+
+            temp_param_index = i // 3
+            temp_export_param= export_params[temp_param_index]
+            
+            temp_comp_index = i % 3
+            temp_color = color_list[temp_comp_index]
+
+            temp_col_name =  temp_comp_name[temp_comp_index] + "_"  + temp_export_param
+
+            # plot time-series record
+            if x_axis_type == "absolute":
+                axes[i, 0].plot(self.record_data["Time"], self.record_data[temp_col_name], color=temp_color, linewidth=0.5)
+            elif x_axis_type == "relative":
+                temp_time = np.arange(len(self.record_data)) * self.record_interval
+                axes[i, 0].plot(temp_time, self.record_data[temp_col_name], color=temp_color, linewidth=0.5)        
+            
+            # set xlim and ylim
             if flag_set_xlim:
                 axes[i, 0].set_xlim(xlim)
             
-            if i < 3:
-                axes[i, 0].set_ylim(-ylim[0], ylim[0])
-                temp_max_value = temp_max_values[i]
-                axes[i, 0].text(0.95, 0.05, "Max: {:.1f}".format(temp_max_value) + " cm/s$^2$", 
-                                transform=axes[i, 0].transAxes, verticalalignment="bottom", 
-                                horizontalalignment="right", fontsize=8, color="k")
-            elif i < 6:
-                axes[i, 0].set_ylim(-ylim[1], ylim[1])
-                temp_max_value = temp_max_values[i]
-                axes[i, 0].text(0.95, 0.05, "Max: {:.2f}".format(temp_max_value) + " cm/s", 
-                                transform=axes[i, 0].transAxes, verticalalignment="bottom", 
-                                horizontalalignment="right", fontsize=8, color="k")
-            else:
-                axes[i, 0].set_ylim(-ylim[2], ylim[2])
-                temp_max_value = temp_max_values[i]
-                axes[i, 0].text(0.95, 0.05, "Max: {:.2f}".format(temp_max_value) + " cm", 
-                                transform=axes[i, 0].transAxes, verticalalignment="bottom", 
-                                horizontalalignment="right", fontsize=8, color="k")
-                
+            if temp_export_param == "acc":
+                temp_param_label_name = "Acc."
+                temp_param_unit = "cm/s$^2$"
+                temp_ylim_index = 0
+
+            elif temp_export_param == "vel":
+                temp_param_label_name = "Vel."
+                temp_param_unit = "cm/s"
+                temp_ylim_index = 1
+            
+            elif temp_export_param == "disp":
+                temp_param_label_name = "Disp."
+                temp_param_unit = "cm"
+                temp_ylim_index = 2
+            
+            axes[i, 0].set_ylim(-ylim[temp_ylim_index], ylim[temp_ylim_index])
+
+            # set y label and annotation
+            y_label = temp_comp_name[temp_comp_index] + " " + temp_param_label_name + " (" + temp_param_unit + ")"
+            ann_text = "Abs. Max: {:.2f}".format(self.record_data_abs_max[temp_col_name]) + " " + temp_param_unit    
+            axes[i, 0].set_ylabel(y_label, fontsize=8)    
+            axes[i, 0].text(0.95, 0.05, ann_text, transform=axes[i, 0].transAxes, verticalalignment="bottom",
+                            horizontalalignment="right", fontsize=8, color="k")    
             
             axes[i, 0].spines["top"].set_visible(False)
             axes[i, 0].spines["bottom"].set_linewidth(0.5)
@@ -513,26 +797,44 @@ class SeismicRecord:
             axes[i, 0].spines["left"].set_linewidth(0.5)
             axes[i, 0].xaxis.set_tick_params(width=0.5)
             axes[i, 0].yaxis.set_tick_params(width=0.5)
-            axes[i, 0].set_ylabel(y_label[i], fontsize=8)
-            
-            if i == 8:
-                axes[i, 0].xaxis.set_major_locator(mdates.SecondLocator(bysecond=second_locator))
+            if x_axis_type == "absolute":
+                axes[i, 0].xaxis.set_major_locator(mdates.SecondLocator(bysecond=major_tick_location))
+                axes[i, 0].xaxis.set_minor_locator(mdates.SecondLocator(bysecond=minor_tick_location))
+
+            if i == len(export_params)*3 - 1:
                 axes[i, 0].tick_params(axis="x", which="major", labelsize=8)
                 axes[i, 0].set_xlabel("Time")
-                
+            
             else:
                 axes[i, 0].xaxis.set_ticklabels([])
-        
-        # annotate max value of holizontal component
-        max_value_holizontal = self.record_data_abs_max[3]
-        axes[0, 0].text(0.95, 0.95, f"Max of Hol. Comp.: {max_value_holizontal:.1f} gal", 
-                        transform=axes[0, 0].transAxes, verticalalignment="top", 
-                        horizontalalignment="right", fontsize=8, color="k")
-        
-        # set title
-        title_str = self.start_time.strftime("%Y/%m/%d %H:%M:%S")
-        axes[0, 0].set_title(title_str, fontsize=10)
-        
+            
+            # annotate max value of holizontal component
+            if temp_export_param == "acc" and temp_comp_index == 0:
+
+                max_value_holizontal = self.record_data_abs_max["H_acc"]
+                axes[i, 0].text(0.95, 0.95, f"Max of Hol. Comp.: {max_value_holizontal:.2f} cm/s$^2$", 
+                                transform=axes[i, 0].transAxes, verticalalignment="top", 
+                                horizontalalignment="right", fontsize=8, color="k")
+            
+            elif temp_export_param == "vel" and temp_comp_index == 0:
+                
+                max_value_holizontal = self.record_data_abs_max["H_vel"]
+                axes[i, 0].text(0.95, 0.95, f"Max of Hol. Comp.: {max_value_holizontal:.2f} cm/s", 
+                                transform=axes[i, 0].transAxes, verticalalignment="top", 
+                                horizontalalignment="right", fontsize=8, color="k")
+                
+            elif temp_export_param == "disp" and temp_comp_index == 0:
+
+                max_value_holizontal = self.record_data_abs_max["H_disp"]
+                axes[i, 0].text(0.95, 0.95, f"Max of Hol. Comp.: {max_value_holizontal:.2f} cm", 
+                                transform=axes[i, 0].transAxes, verticalalignment="top", 
+                                horizontalalignment="right", fontsize=8, color="k")
+            
+            # set title
+            title_str = self.start_time.strftime("%Y/%m/%d %H:%M:%S")
+            axes[0, 0].set_title(title_str, fontsize=10)
+
+        # export figure        
         fig.savefig(fig_name, format="png", dpi=600, pad_inches=0.05, bbox_inches="tight")
         print("Exported time-series record!")
         
@@ -540,8 +842,8 @@ class SeismicRecord:
         plt.clf()
         plt.close()
         gc.collect()
-    
-    
+
+
     def export_fourier_spectrum(self, xlim=[0.05, 20], ylim=[0.1, 1000], force_update=False) -> None:
         
         fig_name =  self.result_folder / (self.record_path.stem + "_fourierspectrum.png")
@@ -588,10 +890,18 @@ class SeismicRecord:
         gc.collect()
         
         
+<<<<<<< HEAD
     def export_response_spectrum(self, xlim=[0.05, 20], ylim=[2, 2000], 
                                  export_type=["abs_acc", "rel_acc", "vel", "disp"], 
                                  x_label="period",
                                  force_update=False) -> None:
+=======
+    def export_response_spectrum(self, xlim=[0.1, 10], ylim=[2, 2000], x_axis = "period",
+                                 export_type=["abs_acc", "rel_acc", "vel", "disp"], force_update=False) -> None:
+        # check x_axis
+        if x_axis not in ["period", "frequency", "p", "f"]:
+            raise ValueError("Invalid x_axis! It should be 'period' or 'frequency'!")
+>>>>>>> bee892ebc1d7e56a3b3d7013e5a5699c87401ca1
         
         # check type
         if type(export_type) != list:
@@ -599,7 +909,7 @@ class SeismicRecord:
         
         for temp_export_type in export_type:
             
-            fig_name =  self.result_folder / (self.record_path.stem + "_" + temp_export_type + "_responsespectrum.png")
+            fig_name =  self.result_folder / (self.record_path.stem + "_" + temp_export_type + "_response-spectrum.png")
             
             if not force_update:
                 # check if the file already exists
@@ -621,6 +931,7 @@ class SeismicRecord:
                 temp_base_col_name = "disp_resp"
                 temp_ylabel = "Disp. Res. Spectrum (cm)"
             
+<<<<<<< HEAD
             if x_label == "period":
                 temp_x = 1 / self.response_spectrum_data["nFreq"]
                 axes[0, 0].set_xlabel("Period (s)")
@@ -634,6 +945,21 @@ class SeismicRecord:
             axes[0, 0].plot(temp_x, self.response_spectrum_data["EW_" + temp_base_col_name], "g", linewidth=0.5, label="EW")
             axes[0, 0].plot(temp_x, self.response_spectrum_data["UD_" + temp_base_col_name], "b", linewidth=0.5, label="UD")
         
+=======
+            if x_axis == "period" or x_axis == "p":
+                axes[0, 0].plot(self.response_spectrum_data["nPeriod"], self.response_spectrum_data["NS_" + temp_base_col_name], "r", linewidth=0.5, label="NS")
+                axes[0, 0].plot(self.response_spectrum_data["nPeriod"], self.response_spectrum_data["EW_" + temp_base_col_name], "g", linewidth=0.5, label="EW")
+                axes[0, 0].plot(self.response_spectrum_data["nPeriod"], self.response_spectrum_data["UD_" + temp_base_col_name], "b", linewidth=0.5, label="UD")
+                axes[0, 0].set_xlabel("Period (s)")
+                
+            elif x_axis == "frequency" or x_axis == "f":
+                
+                axes[0, 0].plot(self.response_spectrum_data["nFreq"], self.response_spectrum_data["NS_" + temp_base_col_name], "r", linewidth=0.5, label="NS")
+                axes[0, 0].plot(self.response_spectrum_data["nFreq"], self.response_spectrum_data["EW_" + temp_base_col_name], "g", linewidth=0.5, label="EW")
+                axes[0, 0].plot(self.response_spectrum_data["nFreq"], self.response_spectrum_data["UD_" + temp_base_col_name], "b", linewidth=0.5, label="UD")
+                axes[0, 0].set_xlabel("Frequency (Hz)")
+            
+>>>>>>> bee892ebc1d7e56a3b3d7013e5a5699c87401ca1
             axes[0, 0].set_xscale("log")
             axes[0, 0].set_yscale("log")
             axes[0, 0].set_xlim(xlim)
@@ -648,7 +974,7 @@ class SeismicRecord:
             leg = axes[0, 0].legend()
             leg.get_frame().set_linewidth(0.5)
             axes[0, 0].grid(visible=True, which="major", axis="both", color="k", linewidth=0.25, linestyle="--")
-            
+                
             title_str = self.start_time.strftime("%Y/%m/%d %H:%M:%S") + " (h=" + str(self.h) + ")"
             axes[0, 0].set_title(title_str, fontsize=10)
             
@@ -664,7 +990,7 @@ class DesignCodeSpectrum:
     
     def __init__(self, xlabel="period", predefined_x=None):
         
-        if predefined_x == None:
+        if predefined_x is None:
             
             predefined_x = np.logspace(-1, 1, 100)
         
@@ -676,41 +1002,72 @@ class DesignCodeSpectrum:
             self.freq = predefined_x
             self.period = 1 / predefined_x
                 
-    def JRA(self, year=2017, level=1, type=1, ground_type=1):
+    def JRA(self, year=2017, level=1, type=1, ground_type=1, c=1):
 
+        """
+        JRA Design Code Spectrum
+        
+        Parameters
+        ----------
+        year : int
+            Year of the JRA Design Code
+        level : int
+            Earthquake level (1 or 2)
+        type : int
+            Earthquake type (1 or 2)
+        ground_type : int
+            Ground type (1, 2 or 3)
+        c : float
+            Coefficient for Reginal Correction
+        
+        Returns
+        -------
+        Sa : array
+            Standard Acceleration Response Spectrum (m/s/s)
+
+        Notes
+        -----
+        - Standard Acceleration Response Spectrum (Sa) does not include the effect of seismic epicenter distribution and probability of exceedance.
+        - Guidelines for seismic performance verification of river structures is also based on the JRA Design Code.
+        - 標準加速度応答スペクトルは、地域別補正係数を考慮していません。
+        - 令和6年において河川構造物の耐震性能照査指針も道路橋司法書に準じています。       
+      
+        """
+        
         self.design_code = "JRA"
         self.year = year
         self.level = level
         self.type = type
         self.ground_type = ground_type
+        self.c = c
 
         if year == 2017:
             if level == 1:
                 if ground_type == 1:
-                    self.Sa = self._JRA_2017_1_1_1(self.period)
+                    self.Sa0 = self._JRA_2017_1_1_1(self.period)
                 elif ground_type == 2:
-                    self.Sa = self._JRA_2017_1_1_2(self.period)
+                    self.Sa0 = self._JRA_2017_1_1_2(self.period)
                 elif ground_type == 3:
-                    self.Sa = self._JRA_2017_1_1_3(self.period)
+                    self.Sa0 = self._JRA_2017_1_1_3(self.period)
                 else:
                     raise ValueError("Invalid ground type!")
             elif level == 2:
                 if type == 1:
                     if ground_type == 1:
-                        self.Sa = self._JRA_2017_2_1_1(self.period)
+                        self.Sa0 = self._JRA_2017_2_1_1(self.period)
                     elif ground_type == 2:
-                        self.Sa = self._JRA_2017_2_1_2(self.period)
+                        self.Sa0 = self._JRA_2017_2_1_2(self.period)
                     elif ground_type == 3:
-                        self.Sa = self._JRA_2017_2_1_3(self.period)
+                        self.Sa0 = self._JRA_2017_2_1_3(self.period)
                     else:
                         raise ValueError("Invalid ground type!")
                 elif type == 2:
                     if ground_type == 1:
-                        self.Sa = self._JRA_2017_2_2_1(self.period)
+                        self.Sa0 = self._JRA_2017_2_2_1(self.period)
                     elif ground_type == 2:
-                        self.Sa = self._JRA_2017_2_2_2(self.period)
+                        self.Sa0 = self._JRA_2017_2_2_2(self.period)
                     elif ground_type == 3:
-                        self.Sa = self._JRA_2017_2_2_3(self.period)
+                        self.Sa0 = self._JRA_2017_2_2_3(self.period)
                     else:
                         raise ValueError("Invalid ground type!")
                 else:
@@ -719,31 +1076,39 @@ class DesignCodeSpectrum:
                 raise ValueError("Invalid earthquake level!")
         else:
             raise ValueError("Invalid JRA Design code year!")
-    
+        
+        self.Sa = self.Sa0 * self.c
+
         return self.Sa
+
+    def get_Sa(self):
+        
+        temp_df = pd.DataFrame({"Frequency": self.freq, "Period": self.period, "Sa": self.Sa})
+        
+        return temp_df
     
     def _debug_plot(self, design_code = "JRA", level=1, type=1):
         
         fig, ax = setup_figure()
 
-        Sa = []
+        Sa0 = []
 
         if design_code == "JRA":
             if level == 1:
-                Sa.append(self._JRA_2017_1_1_1(self.period))
-                Sa.append(self._JRA_2017_1_1_2(self.period))
-                Sa.append(self._JRA_2017_1_1_3(self.period))
+                Sa0.append(self._JRA_2017_1_1_1(self.period))
+                Sa0.append(self._JRA_2017_1_1_2(self.period))
+                Sa0.append(self._JRA_2017_1_1_3(self.period))
 
             elif level == 2:
                 if type == 1:
-                    Sa.append(self._JRA_2017_2_1_1(self.period))
-                    Sa.append(self._JRA_2017_2_1_2(self.period))
-                    Sa.append(self._JRA_2017_2_1_3(self.period))
+                    Sa0.append(self._JRA_2017_2_1_1(self.period))
+                    Sa0.append(self._JRA_2017_2_1_2(self.period))
+                    Sa0.append(self._JRA_2017_2_1_3(self.period))
 
                 elif type == 2:
-                    Sa.append(self._JRA_2017_2_2_1(self.period))
-                    Sa.append(self._JRA_2017_2_2_2(self.period))
-                    Sa.append(self._JRA_2017_2_2_3(self.period))
+                    Sa0.append(self._JRA_2017_2_2_1(self.period))
+                    Sa0.append(self._JRA_2017_2_2_2(self.period))
+                    Sa0.append(self._JRA_2017_2_2_3(self.period))
                                                 
                 else:
                     raise ValueError("Invalid earthquake type!")
@@ -752,8 +1117,8 @@ class DesignCodeSpectrum:
         else:
             raise ValueError("Invalid Design code!")
 
-        for i in range(len(Sa)):
-            ax[0, 0].plot(self.period, Sa[i], label=f"Ground Type {i+1}")
+        for i in range(len(Sa0)):
+            ax[0, 0].plot(self.period, Sa0[i], label=f"Ground Type {i+1}")
         
         ax[0, 0].legend()
         ax[0, 0].set_xscale("log")
@@ -764,7 +1129,7 @@ class DesignCodeSpectrum:
         elif level == 2:
             ax[0, 0].set_ylim([0.3, 30])
         ax[0, 0].set_xlabel("Period (s)")
-        ax[0, 0].set_ylabel("Sa (m/s/s)")
+        ax[0, 0].set_ylabel("Sa0 (m/s/s)")
 
         ax[0, 0].xaxis.set_major_formatter(mticker.ScalarFormatter())
         ax[0, 0].yaxis.set_major_formatter(mticker.ScalarFormatter())
@@ -784,135 +1149,229 @@ class DesignCodeSpectrum:
         ax[0, 0].xaxis.set_tick_params(width=0.5)
         ax[0, 0].yaxis.set_tick_params(width=0.5)
 
-
-
         plt.show()
 
     def _JRA_2017_1_1_1(self, T):
 
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.1)
         indices_2 = np.where((T >= 0.1) & (T <= 1.1))
         indices_3 = np.where(T > 1.1)
 
-        Sa[indices_1] = 4.31 * T[indices_1] ** (1/3)
-        Sa[indices_1 * (Sa[indices_1] < 1.6)] =  1.6
-        Sa[indices_2] = 2.0
-        Sa[indices_3] = 2.2 / T[indices_3]
+        Sa0[indices_1] = 4.31 * T[indices_1] ** (1/3)
+        Sa0[indices_1 * (Sa0[indices_1] < 1.6)] =  1.6
+        Sa0[indices_2] = 2.0
+        Sa0[indices_3] = 2.2 / T[indices_3]
 
-        return Sa
+        return Sa0
                 
     def _JRA_2017_1_1_2(self, T):
 
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.2)
         indices_2 = np.where((T >= 0.2) & (T <= 1.3))
         indices_3 = np.where(T > 1.3)
 
-        Sa[indices_1] = 4.27 * T[indices_1] ** (1/3)
-        Sa[indices_1 * (Sa[indices_1] < 2.0)] = 2.0
-        Sa[indices_2] = 2.5
-        Sa[indices_3] = 3.25 / T[indices_3]
+        Sa0[indices_1] = 4.27 * T[indices_1] ** (1/3)
+        Sa0[indices_1 * (Sa0[indices_1] < 2.0)] = 2.0
+        Sa0[indices_2] = 2.5
+        Sa0[indices_3] = 3.25 / T[indices_3]
 
-        return Sa
+        return Sa0
     
     def _JRA_2017_1_1_3(self, T):
 
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.34)
         indices_2 = np.where((T >= 0.34) & (T <= 1.5))
         indices_3 = np.where(T > 1.5)
 
-        Sa[indices_1] = 4.3 * T[indices_1] ** (1/3)
-        print(Sa[indices_1])
-        Sa[indices_1 * (Sa[indices_1] < 2.4)] = 2.4   
-        Sa[indices_2] = 3.0
-        Sa[indices_3] = 4.50 / T[indices_3]
+        Sa0[indices_1] = 4.3 * T[indices_1] ** (1/3)
+        print(Sa0[indices_1])
+        Sa0[indices_1 * (Sa0[indices_1] < 2.4)] = 2.4   
+        Sa0[indices_2] = 3.0
+        Sa0[indices_3] = 4.50 / T[indices_3]
 
-        return Sa
+        return Sa0
                 
     def _JRA_2017_2_1_1(self, T):
 
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.16)
         indices_2 = np.where((T >= 0.16) & (T <= 0.6))
         indices_3 = np.where(T > 0.6)
 
-        Sa[indices_1] = 25.79 * T[indices_1] ** (1/3)
-        Sa[indices_2] = 14.0
-        Sa[indices_3] = 8.4 / T[indices_3]
+        Sa0[indices_1] = 25.79 * T[indices_1] ** (1/3)
+        Sa0[indices_2] = 14.0
+        Sa0[indices_3] = 8.4 / T[indices_3]
 
-        return Sa
+        return Sa0
     
     def _JRA_2017_2_1_2(self, T):
 
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.22)
         indices_2 = np.where((T >= 0.22) & (T <= 0.9))
         indices_3 = np.where(T > 0.9)
 
-        Sa[indices_1] = 21.53 * T[indices_1] ** (1/3)
-        Sa[indices_2] = 13.0
-        Sa[indices_3] = 11.7 / T[indices_3]
+        Sa0[indices_1] = 21.53 * T[indices_1] ** (1/3)
+        Sa0[indices_2] = 13.0
+        Sa0[indices_3] = 11.7 / T[indices_3]
 
-        return Sa
+        return Sa0
     
     def _JRA_2017_2_1_3(self, T):
 
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.34)
         indices_2 = np.where((T >= 0.34) & (T <= 1.4))
         indices_3 = np.where(T > 1.4)
 
-        Sa[indices_1] = 17.19 * T[indices_1] ** (1/3)
-        Sa[indices_2] = 12.0
-        Sa[indices_3] = 16.8 / T[indices_3]
+        Sa0[indices_1] = 17.19 * T[indices_1] ** (1/3)
+        Sa0[indices_2] = 12.0
+        Sa0[indices_3] = 16.8 / T[indices_3]
 
-        return Sa
+        return Sa0
 
     def _JRA_2017_2_2_1(self, T):
 
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.3)
         indices_2 = np.where((T >= 0.3) & (T <= 0.7))
         indices_3 = np.where(T > 0.7)
 
-        Sa[indices_1] = 44.63 * T[indices_1] ** (2/3)
-        Sa[indices_2] = 20
-        Sa[indices_3] = 11.04 / T[indices_3] ** (5/3)
+        Sa0[indices_1] = 44.63 * T[indices_1] ** (2/3)
+        Sa0[indices_2] = 20
+        Sa0[indices_3] = 11.04 / T[indices_3] ** (5/3)
 
-        return Sa
+        return Sa0
 
     def _JRA_2017_2_2_2(self, T):
         
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.4)
         indices_2 = np.where((T >= 0.4) & (T <= 1.2))
         indices_3 = np.where(T > 1.2)
-        Sa[indices_1] = 32.24 * T[indices_1] ** (2/3)
-        Sa[indices_2] = 17.5
-        Sa[indices_3] = 23.71/ T[indices_3] ** (5/3)
+        Sa0[indices_1] = 32.24 * T[indices_1] ** (2/3)
+        Sa0[indices_2] = 17.5
+        Sa0[indices_3] = 23.71/ T[indices_3] ** (5/3)
 
-        return Sa
+        return Sa0
     
     def _JRA_2017_2_2_3(self, T):
 
-        Sa = np.zeros(len(T))
+        Sa0 = np.zeros(len(T))
 
         indices_1 = np.where(T < 0.5)
         indices_2 = np.where((T >= 0.5) & (T <= 1.5))
         indices_3 = np.where(T > 1.5)
 
-        Sa[indices_1] = 23.81 * T[indices_1] ** (2/3)
-        Sa[indices_2] = 15.0
-        Sa[indices_3] = 29.48 / T[indices_3] ** (5/3)
+        Sa0[indices_1] = 23.81 * T[indices_1] ** (2/3)
+        Sa0[indices_2] = 15.0
+        Sa0[indices_3] = 29.48 / T[indices_3] ** (5/3)
 
-        return Sa
+        return Sa0
+
+class GroundType:
+    def __init__(self, ground_model = None, physical_param = "vs"):
+        
+        """
+        Ground Type Evaluation
+        
+        Parameters
+        ----------
+        ground_model : array
+            Ground model data (N x 3)
+        physical_param : str
+            Physical parameter (vs or SPT-N)
+
+        Returns
+        -------
+        Tg : float
+            Dominant period of subsurface ground (s)
+        ground_type : int
+            Ground type (1, 2 or 3)
+        
+        Notes
+        -----
+        - Ground model should be N x 3 array.
+            - 1st column: Thickness of layer (m)
+            - 2nd column: Vs (m/s) or SPT-N
+            - 3rd column: Soil Type (S: Sandy Soil or C: Clayey Soil)
+        
+        """
+        self.physical_param = physical_param
+        
+        # check ground_model which should be N x 3 array
+        try:
+            temp_ground_model = pd.DataFrame(ground_model, columns=["Thickness", "Physical Parameter", "Soil Type"])
+        except:
+            raise ValueError("Invalid ground model!")
+        else:
+            # convert 0 and 1 column to float
+            temp_ground_model[["Thickness", "Physical Parameter"]] = temp_ground_model[["Thickness", "Physical Parameter"]].astype(float)
+            self.ground_model = temp_ground_model
+        
+        if not temp_ground_model.shape[1] == 3:
+            raise ValueError("Invalid ground model!")
+        
+        # check physical_param
+        if not physical_param in ["vs", "SPT-N"]:
+            raise ValueError("Invalid physical parameter!")
+        
+        elif physical_param == "SPT-N":
+            temp_vs = self._convert_N_to_vs(self.ground_model)
+            self.ground_model["Physical Parameter"] = temp_vs
+            
+        self._calc_soil_type()
+    
+    def get_ground_type(self):
+        
+        return (self.Tg, self.ground_type)
+    
+    def _convert_N_to_vs(self, ground_model):
+        
+        temp_vs = np.zeros(len(ground_model))
+        
+        for i in range(len(ground_model)):
+            temp_N = ground_model.loc[i, "Physical Parameter"]
+            temp_soil_type = ground_model.loc[i, "Soil Type"]
+            
+            if temp_soil_type == "S":
+                if temp_N <= 50:
+                    temp_vs[i] = 80 * temp_N ** (1/3)
+                else:
+                    temp_vs[i] = 80 * 50 ** (1/3)
+            elif temp_soil_type == "C":
+                if temp_N <= 25:
+                    temp_vs[i] = 100 * temp_N ** (1/3)
+                else:
+                    temp_vs[i] = 100 * 25 ** (1/3)
+            else:
+                raise ValueError("Invalid soil type found in ground model!")
+                    
+        return temp_vs
+
+    def _calc_soil_type(self):
+        
+        # calculate subsurface ground dominant period
+        self.Tg = 4 * (self.ground_model["Thickness"] / self.ground_model["Physical Parameter"]).sum()
+        
+        if self.Tg < 0.2:
+            self.ground_type = 1
+        
+        elif self.Tg < 0.6:
+            self.ground_type = 2
+        
+        else:
+            self.ground_type = 3
+        
+        
