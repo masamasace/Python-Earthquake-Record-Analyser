@@ -588,7 +588,10 @@ class SeismicRecord:
         gc.collect()
         
         
-    def export_response_spectrum(self, xlim=[0.05, 20], ylim=[2, 2000], export_type=["abs_acc", "rel_acc", "vel", "disp"], force_update=False) -> None:
+    def export_response_spectrum(self, xlim=[0.05, 20], ylim=[2, 2000], 
+                                 export_type=["abs_acc", "rel_acc", "vel", "disp"], 
+                                 x_label="period",
+                                 force_update=False) -> None:
         
         # check type
         if type(export_type) != list:
@@ -618,16 +621,23 @@ class SeismicRecord:
                 temp_base_col_name = "disp_resp"
                 temp_ylabel = "Disp. Res. Spectrum (cm)"
             
+            if x_label == "period":
+                temp_x = 1 / self.response_spectrum_data["nFreq"]
+                axes[0, 0].set_xlabel("Period (s)")
+            elif x_label == "freq":
+                temp_x = self.response_spectrum_data["nFreq"]
+                axes[0, 0].set_xlabel("Frequency (Hz)")
+            else:
+                raise ValueError("Invalid x_label!")
             
-            axes[0, 0].plot(self.response_spectrum_data["nFreq"], self.response_spectrum_data["NS_" + temp_base_col_name], "r", linewidth=0.5, label="NS")
-            axes[0, 0].plot(self.response_spectrum_data["nFreq"], self.response_spectrum_data["EW_" + temp_base_col_name], "g", linewidth=0.5, label="EW")
-            axes[0, 0].plot(self.response_spectrum_data["nFreq"], self.response_spectrum_data["UD_" + temp_base_col_name], "b", linewidth=0.5, label="UD")
+            axes[0, 0].plot(temp_x, self.response_spectrum_data["NS_" + temp_base_col_name], "r", linewidth=0.5, label="NS")
+            axes[0, 0].plot(temp_x, self.response_spectrum_data["EW_" + temp_base_col_name], "g", linewidth=0.5, label="EW")
+            axes[0, 0].plot(temp_x, self.response_spectrum_data["UD_" + temp_base_col_name], "b", linewidth=0.5, label="UD")
         
             axes[0, 0].set_xscale("log")
             axes[0, 0].set_yscale("log")
             axes[0, 0].set_xlim(xlim)
             axes[0, 0].set_ylim(ylim)
-            axes[0, 0].set_xlabel("Frequency (Hz)")
             axes[0, 0].set_ylabel(temp_ylabel)
             axes[0, 0].spines["top"].set_linewidth(0.5)
             axes[0, 0].spines["bottom"].set_linewidth(0.5)
